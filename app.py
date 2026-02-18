@@ -1,0 +1,368 @@
+# ENGINE POLICY:
+# The uploaded ES Teck PDF must NOT include the bottom color legend.
+# Bars are assumed to be pre-cleaned before upload.
+# Engine will not attempt legend suppression.
+
+"""
+ES Teck Bio Scan — Deterministic Disease Bar Preprocessing Service
+Version: v3.0-stable-precleaned-input
+
+This service performs PURELY DETERMINISTIC pixel-level analysis of
+ES Teck disease screening horizontal bars from Bio Scan PDFs.
+
+POLICY: PDFs MUST be uploaded WITHOUT the bottom color legend.
+Input is treated as pre-cleaned. No legend compensation logic exists.
+
+NO AI. NO ML. NO HEURISTICS. NO DYNAMIC THRESHOLDS.
+NO STRUCTURAL ROI. NO CONTOUR DETECTION. NO GRAY TRACK DETECTION.
+Fixed saturation gates and hue ranges only.
+"""
+
+import base64
+import hashlib
+import os
+from typing import Any
+
+import fitz  # PyMuPDF
+import numpy as np
+from PIL import Image
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+# Debug output directory
+DEBUG_DIR = os.path.join(os.path.dirname(__file__), "debug_output")
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY", "")
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+MIN_DPI = 300
+TARGET_DPI = 400
+MIN_BAR_WIDTH_RATIO = 0.03  # 3% of total bar width
+
+# ── No global HSV constants needed ────────────────────────────────────────────
+# All thresholds are local to compute_bar_metrics() for clarity.
+
+# ── ES Teck Disease Bar Layout ───────────────────────────────────────────────
+# Vertical crop bands as percentage of page height.
+# These are static positions based on the ES Teck PDF layout.
+# Each entry: (label, top_pct, bottom_pct)
+# Horizontal padding: 5% from each side
+
+HORIZONTAL_PAD_PCT = 0.05
+
+# Disease bars are located on the "Disease Screening Score" page.
+# The page typically contains 18 horizontal bars stacked vertically.
+# These Y-ranges are approximate and may need calibration per layout version.
+DISEASE_BAR_BANDS = [
+    ("atherosclerosis", 0.185, 0.215),
+    ("lv_hypertrophy", 0.220, 0.250),
+    ("large_artery_stiffness", 0.255, 0.285),
+    ("small_medium_artery_stiffness", 0.290, 0.320),
+    ("peripheral_vessels", 0.325, 0.355),
+    ("diabetes_screening", 0.360, 0.390),
+    ("insulin_resistance", 0.395, 0.425),
+    ("metabolic_syndrome", 0.430, 0.460),
+    ("ldl_cholesterol", 0.465, 0.495),
+    ("chronic_hepatitis", 0.500, 0.530),
+    ("hepatic_fibrosis", 0.535, 0.565),
+    ("kidney_function", 0.570, 0.600),
+    ("digestive_disorders", 0.605, 0.635),
+    ("respiratory", 0.640, 0.670),
+    ("hyperthyroidism", 0.675, 0.705),
+    ("hypothyroidism", 0.710, 0.740),
+    ("major_depression", 0.745, 0.775),
+    ("tissue_inflammatory_process", 0.780, 0.810),
+]
+
+
+def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
+    """
+    Convert RGB image array [H, W, 3] uint8 to HSV [H, W, 3] float64.
+    H in [0, 360), S in [0, 1], V in [0, 1].
+    
+    Deterministic — no library-specific rounding.
+    """
+    rgb = image_array.astype(np.float64) / 255.0
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+
+    cmax = np.maximum(np.maximum(r, g), b)
+    cmin = np.minimum(np.minimum(r, g), b)
+    delta = cmax - cmin
+
+    # Hue
+    hue = np.zeros_like(cmax)
+    mask_r = (cmax == r) & (delta > 0)
+    mask_g = (cmax == g) & (delta > 0)
+    mask_b = (cmax == b) & (delta > 0)
+
+    hue[mask_r] = 60.0 * (((g[mask_r] - b[mask_r]) / delta[mask_r]) % 6)
+    hue[mask_g] = 60.0 * (((b[mask_g] - r[mask_g]) / delta[mask_g]) + 2)
+    hue[mask_b] = 60.0 * (((r[mask_b] - g[mask_b]) / delta[mask_b]) + 4)
+
+    # Saturation
+    sat = np.where(cmax > 0, delta / cmax, 0.0)
+
+    # Value
+    val = cmax
+
+    return np.stack([hue, sat, val], axis=-1)
+
+
+def compute_bar_metrics(
+    hsv_img: np.ndarray,
+    bar_width: int,
+    bar_name: str = ""
+) -> dict[str, Any] | None:
+    """
+    Stable logic used before legend interference.
+
+    1. Detect fill using high saturation mask.
+    2. Find horizontal fill region.
+    3. Compute progression_percent.
+    4. Determine dominant hue inside fill.
+    """
+
+    H = hsv_img[:, :, 0]
+    S = hsv_img[:, :, 1]
+    V = hsv_img[:, :, 2]
+
+    # STEP 1 — Detect colored fill only
+    SAT_GATE = 0.45
+    VAL_GATE = 0.35
+
+    fill_mask = (S > SAT_GATE) & (V > VAL_GATE)
+
+    # Horizontal projection
+    projection = fill_mask.any(axis=0)
+    nonzero = np.where(projection)[0]
+
+    if len(nonzero) == 0:
+        return {
+            "progression_percent": 0,
+            "colorPresence": None,
+        }
+
+    first_x = int(nonzero[0])
+    last_x = int(nonzero[-1])
+
+    fill_width = last_x - first_x + 1
+
+    if fill_width < 0.03 * bar_width:
+        return {
+            "progression_percent": 0,
+            "colorPresence": None,
+        }
+
+    progression_percent = round((fill_width / bar_width) * 100)
+    progression_percent = max(0, min(100, progression_percent))
+
+    # STEP 2 — Determine dominant hue inside fill region
+    hue_slice = H[:, first_x:last_x + 1]
+    sat_slice = S[:, first_x:last_x + 1]
+
+    valid_pixels = hue_slice[sat_slice > SAT_GATE]
+
+    if len(valid_pixels) == 0:
+        return {
+            "progression_percent": progression_percent,
+            "colorPresence": None,
+        }
+
+    dominant_hue = float(np.median(valid_pixels))
+
+    hasGreen = 65 <= dominant_hue <= 160
+    hasYellow = 28 <= dominant_hue < 65
+    hasOrange = 15 <= dominant_hue < 28
+    hasRed = dominant_hue < 15 or dominant_hue > 160
+
+    return {
+        "progression_percent": progression_percent,
+        "colorPresence": {
+            "hasGreen": hasGreen,
+            "hasYellow": hasYellow,
+            "hasOrange": hasOrange,
+            "hasRed": hasRed,
+        },
+    }
+
+
+
+
+def find_disease_screening_page(doc: fitz.Document) -> int | None:
+    """
+    Find the page containing disease screening bars by looking for
+    the text "Disease Screening Score" or similar heading.
+    Returns page index or None.
+    """
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        text = page.get_text("text").lower()
+        if "disease screening" in text or "screening score" in text:
+            return page_idx
+    return None
+
+
+def process_pdf(pdf_bytes: bytes) -> dict:
+    """
+    Main processing pipeline.
+    
+    Steps 1-7 as specified in the deterministic pipeline.
+    Step 8: Do NOT derive severity.
+    """
+    # Step 1: Render PDF to image at TARGET_DPI
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    # Find disease screening page
+    ds_page_idx = find_disease_screening_page(doc)
+    if ds_page_idx is None:
+        return {
+            "success": False,
+            "error": "Disease screening page not found in PDF",
+            "results": {},
+        }
+
+    page = doc[ds_page_idx]
+
+    # Render at target DPI
+    zoom = TARGET_DPI / 72.0  # PDF default is 72 DPI
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+
+    # Validate resolution
+    actual_dpi_x = pix.width / (page.rect.width / 72.0)
+    if actual_dpi_x < MIN_DPI:
+        return {
+            "success": False,
+            "error": f"Rendered resolution {actual_dpi_x:.0f} DPI < minimum {MIN_DPI} DPI",
+            "results": {},
+        }
+
+    # Convert to numpy array
+    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, 3
+    )
+
+    page_height = pix.height
+    page_width = pix.width
+
+    # Horizontal padding
+    x_start = int(page_width * HORIZONTAL_PAD_PCT)
+    x_end = int(page_width * (1.0 - HORIZONTAL_PAD_PCT))
+    bar_total_width = x_end - x_start
+
+    results = {}
+    errors = []
+
+    for disease_name, top_pct, bottom_pct in DISEASE_BAR_BANDS:
+        try:
+            # Step 2: Crop disease bar region
+            y_start = int(page_height * top_pct)
+            y_end = int(page_height * bottom_pct)
+
+            if y_end <= y_start or y_end > page_height:
+                results[disease_name] = None
+                errors.append(f"{disease_name}: invalid crop region")
+                continue
+
+            bar_crop = img_array[y_start:y_end, x_start:x_end]
+
+            if bar_crop.size == 0:
+                results[disease_name] = None
+                errors.append(f"{disease_name}: empty crop")
+                continue
+
+            # Step 3: Convert to HSV
+            hsv = rgb_to_hsv(bar_crop)
+
+            # DEBUG: Save cropped bar image and print shape
+            debug_path = os.path.join(DEBUG_DIR, f"debug_bar_{disease_name}.png")
+            Image.fromarray(bar_crop).save(debug_path)
+            print(f"[DEBUG] bar_name={disease_name}  hsv_img.shape={hsv.shape}  saved={debug_path}")
+
+            # Step 4: Compute metrics (fill detection + dominant hue)
+            metrics = compute_bar_metrics(hsv, bar_total_width, bar_name=disease_name)
+            results[disease_name] = metrics
+
+        except Exception as e:
+            results[disease_name] = None
+            errors.append(f"{disease_name}: {str(e)}")
+
+    doc.close()
+
+    return {
+        "success": True,
+        "engine_version": "v3.0-stable-precleaned-input",
+        "page_index": ds_page_idx,
+        "resolution_dpi": round(actual_dpi_x),
+        "results": results,
+        "errors": errors if errors else None,
+    }
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "version": "v3.0-stable-precleaned-input"})
+
+
+@app.route("/preprocess", methods=["POST"])
+def preprocess():
+    """
+    POST /preprocess
+    
+    Body (JSON):
+      - pdf_base64: string (base64-encoded PDF bytes)
+      - pdf_checksum: string (SHA-256 hex of original PDF bytes for verification)
+    
+    Headers:
+      - Authorization: Bearer <PREPROCESS_API_KEY>
+    
+    Returns:
+      - 200: { success: true, results: { <disease>: { progression_percent, colorPresence } } }
+      - 400: Bad request
+      - 401: Unauthorized
+      - 500: Processing error
+    """
+    # Auth check
+    if PREPROCESS_API_KEY:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
+            return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+
+    pdf_base64 = data.get("pdf_base64")
+    pdf_checksum = data.get("pdf_checksum")
+
+    if not pdf_base64:
+        return jsonify({"error": "pdf_base64 is required"}), 400
+
+    try:
+        pdf_bytes = base64.b64decode(pdf_base64)
+    except Exception:
+        return jsonify({"error": "Invalid base64 encoding"}), 400
+
+    # Verify checksum if provided
+    if pdf_checksum:
+        actual_checksum = hashlib.sha256(pdf_bytes).hexdigest()
+        if actual_checksum != pdf_checksum.lower():
+            return jsonify({
+                "error": "Checksum mismatch",
+                "expected": pdf_checksum,
+                "actual": actual_checksum,
+            }), 400
+
+    # Process
+    try:
+        result = process_pdf(pdf_bytes)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=False)
