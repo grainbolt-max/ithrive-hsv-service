@@ -24,6 +24,7 @@ from typing import Any
 
 import fitz  # PyMuPDF
 import numpy as np
+import cv2
 from PIL import Image
 from flask import Flask, jsonify, request
 
