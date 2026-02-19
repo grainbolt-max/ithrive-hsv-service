@@ -190,8 +190,6 @@ def compute_bar_metrics(
 
 
 
-def process_pdf(pdf_bytes: bytes) -> dict:
-
     # Step 1: Open PDF
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
@@ -279,18 +277,34 @@ def process_pdf(pdf_bytes: bytes) -> dict:
             results[disease_name] = None
             errors.append(f"{disease_name}: {str(e)}")
 
+    def process_pdf(pdf_bytes: bytes) -> dict:
+
+    # Step 1: Open PDF
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    DS_PAGE_INDEX = 2
+
+    if len(doc) <= DS_PAGE_INDEX:
+        return {
+            "success": False,
+            "error": f"PDF has only {len(doc)} pages; expected >= {DS_PAGE_INDEX + 1}",
+            "results": {},
+        }
+
+    page = doc[DS_PAGE_INDEX]
+
+    # ... processing loop here ...
+
     doc.close()
 
-   return {
-    "success": True,
-    "engine_version": "v3.0-stable-precleaned-input",
-    "page_index": DS_PAGE_INDEX,
-    "resolution_dpi": round(actual_dpi_x),
-    "results": results,
-    "errors": errors if errors else None,
-}
-
-
+    return {
+        "success": True,
+        "engine_version": "v3.0-stable-precleaned-input",
+        "page_index": DS_PAGE_INDEX,
+        "resolution_dpi": round(actual_dpi_x),
+        "results": results,
+        "errors": errors if errors else None,
+    }
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "v3.0-stable-precleaned-input"})
