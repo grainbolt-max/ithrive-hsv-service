@@ -188,7 +188,14 @@ def compute_bar_metrics(
         },
     }
 def process_pdf(pdf_bytes: bytes) -> dict:
+    try:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+except Exception:
+    return {
+        "success": False,
+        "error": "Invalid or corrupted PDF file",
+        "results": {},
+    }
 
     DS_PAGE_INDEX = 2
 
