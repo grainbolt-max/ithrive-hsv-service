@@ -29,6 +29,7 @@ from PIL import Image
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB
 
 # Debug output directory
 DEBUG_DIR = os.path.join(os.path.dirname(__file__), "debug_output")
@@ -317,9 +318,16 @@ def preprocess():
         if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
             return jsonify({"error": "Unauthorized"}), 401
 
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Request body required"}), 400
+    import json
+
+raw = request.data
+if not raw:
+    return jsonify({"error": "Request body required"}), 400
+
+try:
+    data = json.loads(raw)
+except Exception:
+    return jsonify({"error": "Invalid JSON body"}), 400
 
     pdf_base64 = data.get("pdf_base64")
     pdf_checksum = data.get("pdf_checksum")
