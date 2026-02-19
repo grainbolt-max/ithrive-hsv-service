@@ -188,6 +188,15 @@ def compute_bar_metrics(
         },
     }
 def process_pdf(pdf_bytes: bytes) -> dict:
+
+    # Fast header validation (deterministic guard)
+    if not pdf_bytes.startswith(b"%PDF"):
+        return {
+            "success": False,
+            "error": "Invalid PDF header",
+            "results": {},
+        }
+
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception:
