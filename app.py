@@ -190,42 +190,31 @@ def compute_bar_metrics(
 
 
 
-
-def find_disease_screening_page(doc: fitz.Document) -> int | None:
-    """
-    Find the page containing disease screening bars by looking for
-    the text "Disease Screening Score" or similar heading.
-    Returns page index or None.
-    """
-    for page_idx in range(len(doc)):
-        page = doc[page_idx]
-        text = page.get_text("text").lower()
-        if "disease screening" in text or "screening score" in text:
-            return page_idx
-    return None
-
-
 def process_pdf(pdf_bytes: bytes) -> dict:
+
+    # Step 1: Open PDF
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    # Deterministic fixed page index
+    DS_PAGE_INDEX = 2
+
+    if len(doc) <= DS_PAGE_INDEX:
+        return {
+            "success": False,
+            "error": f"PDF has only {len(doc)} pages; expected >= {DS_PAGE_INDEX + 1}",
+            "results": {},
+        }
+
+    page = doc[DS_PAGE_INDEX]
+
+    # Render + continue processing...
     """
     Main processing pipeline.
     
     Steps 1-7 as specified in the deterministic pipeline.
     Step 8: Do NOT derive severity.
     """
-    # Step 1: Render PDF to image at TARGET_DPI
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    # Find disease screening page
-    ds_page_idx = find_disease_screening_page(doc)
-    if ds_page_idx is None:
-        return {
-            "success": False,
-            "error": "Disease screening page not found in PDF",
-            "results": {},
-        }
-
-    page = doc[ds_page_idx]
-
+    
     # Render at target DPI
     zoom = TARGET_DPI / 72.0  # PDF default is 72 DPI
     mat = fitz.Matrix(zoom, zoom)
@@ -292,14 +281,14 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 
     doc.close()
 
-    return {
-        "success": True,
-        "engine_version": "v3.0-stable-precleaned-input",
-        "page_index": ds_page_idx,
-        "resolution_dpi": round(actual_dpi_x),
-        "results": results,
-        "errors": errors if errors else None,
-    }
+   return {
+    "success": True,
+    "engine_version": "v3.0-stable-precleaned-input",
+    "page_index": DS_PAGE_INDEX,
+    "resolution_dpi": round(actual_dpi_x),
+    "results": results,
+    "errors": errors if errors else None,
+}
 
 
 @app.route("/health", methods=["GET"])
