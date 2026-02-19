@@ -18,8 +18,7 @@ NO STRUCTURAL ROI. NO CONTOUR DETECTION. NO GRAY TRACK DETECTION.
 Fixed saturation gates and hue ranges only.
 """
 
-import base64
-import hashlib
+
 import os
 from typing import Any
 
@@ -293,69 +292,58 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 def health():
     return jsonify({"status": "ok", "version": "v3.0-stable-precleaned-input"})
 
-
 @app.route("/preprocess", methods=["POST"])
 def preprocess():
     """
     POST /preprocess
-    
-    Body (JSON):
-      - pdf_base64: string (base64-encoded PDF bytes)
-      - pdf_checksum: string (SHA-256 hex of original PDF bytes for verification)
-    
+
     Headers:
-      - Authorization: Bearer <PREPROCESS_API_KEY>
-    
-    Returns:
-      - 200: { success: true, results: { <disease>: { progression_percent, colorPresence } } }
-      - 400: Bad request
-      - 401: Unauthorized
-      - 500: Processing error
+      Authorization: Bearer <PREPROCESS_API_KEY>
+
+    Body (multipart/form-data):
+      - file: PDF file
     """
-    # Auth check
+
+    # ---- Auth check ----
     if PREPROCESS_API_KEY:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
             return jsonify({"error": "Unauthorized"}), 401
 
-    import json
+    # ---- Validate file ----
+    if "file" not in request.files:
+        return jsonify({"error": "file is required"}), 400
 
-raw = request.data
-if not raw:
-    return jsonify({"error": "Request body required"}), 400
+    file = request.files["file"]
 
-try:
-    data = json.loads(raw)
-except Exception:
-    return jsonify({"error": "Invalid JSON body"}), 400
+    if file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
 
-    pdf_base64 = data.get("pdf_base64")
-    pdf_checksum = data.get("pdf_checksum")
-
-    if not pdf_base64:
-        return jsonify({"error": "pdf_base64 is required"}), 400
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are allowed"}), 400
 
     try:
-        pdf_bytes = base64.b64decode(pdf_base64)
+        pdf_bytes = file.read()
+
+        if not pdf_bytes:
+            return jsonify({"error": "Empty file uploaded"}), 400
+
+        if not pdf_bytes.startswith(b"%PDF"):
+            return jsonify({"error": "Invalid PDF file"}), 400
+
     except Exception:
-        return jsonify({"error": "Invalid base64 encoding"}), 400
+        return jsonify({"error": "Failed to read uploaded file"}), 400
 
-    # Verify checksum if provided
-    if pdf_checksum:
-        actual_checksum = hashlib.sha256(pdf_bytes).hexdigest()
-        if actual_checksum != pdf_checksum.lower():
-            return jsonify({
-                "error": "Checksum mismatch",
-                "expected": pdf_checksum,
-                "actual": actual_checksum,
-            }), 400
-
-    # Process
+    # ---- Process PDF ----
     try:
         result = process_pdf(pdf_bytes)
-        return jsonify(result)
+        return jsonify(result), 200
+
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
