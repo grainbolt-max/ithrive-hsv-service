@@ -5,7 +5,7 @@
 
 """
 ES Teck Bio Scan — Deterministic Disease Bar Preprocessing Service
-Version: v3.0-stable-precleaned-input
+Version: Version: v3.0-stable-precleaned-input
 
 This service performs PURELY DETERMINISTIC pixel-level analysis of
 ES Teck disease screening horizontal bars from Bio Scan PDFs.
