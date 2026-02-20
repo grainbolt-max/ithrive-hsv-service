@@ -198,7 +198,108 @@ def compute_bar_metrics(
         "progression_percent": progression_percent,
         "colorPresence": severity,
     }
-       
+def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
+
+    page_height, page_width, _ = img_array.shape
+
+    # ─────────────────────────────────────────────
+    # 1. Extract class boxes (fixed layout bands)
+    # ─────────────────────────────────────────────
+
+    CLASS_BOXES = [
+        # (y_start_pct, y_end_pct, x_start_pct, x_end_pct)
+        (0.30, 0.40, 0.10, 0.25),  # Brain tissue
+        (0.50, 0.60, 0.10, 0.25),  # Body tissue
+        (0.20, 0.30, 0.40, 0.60),  # BP Class
+        (0.30, 0.40, 0.70, 0.90),  # DPA Class
+        (0.50, 0.60, 0.70, 0.90),  # O2 Class
+        (0.60, 0.70, 0.50, 0.70),  # ANS Class
+        (0.60, 0.70, 0.30, 0.50),  # BC Class
+    ]
+
+    total_score = 0
+
+    for y0, y1, x0, x1 in CLASS_BOXES:
+
+        ys = int(page_height * y0)
+        ye = int(page_height * y1)
+        xs = int(page_width * x0)
+        xe = int(page_width * x1)
+
+        crop = img_array[ys:ye, xs:xe]
+
+        if crop.size == 0:
+            continue
+
+        gray = np.mean(crop, axis=2)
+        dark_pixels = gray < 70
+
+        # Count connected dark region rows (simple digit detection)
+        row_projection = dark_pixels.sum(axis=1)
+        rows = np.where(row_projection > 5)[0]
+
+        if len(rows) == 0:
+            continue
+
+        # Estimate class value from digit height (deterministic)
+        digit_height = rows[-1] - rows[0]
+
+        # ES Teck class values are 1–5
+        # Relative size mapping (calibrated for this layout)
+        if digit_height < 15:
+            value = 1
+        elif digit_height < 22:
+            value = 2
+        elif digit_height < 28:
+            value = 3
+        elif digit_height < 34:
+            value = 4
+        else:
+            value = 5
+
+        total_score += value
+
+    # ─────────────────────────────────────────────
+    # 2. Detect center box risk color
+    # ─────────────────────────────────────────────
+
+    y_start = int(page_height * 0.35)
+    y_end   = int(page_height * 0.65)
+    x_start = int(page_width * 0.30)
+    x_end   = int(page_width * 0.70)
+
+    center_crop = img_array[y_start:y_end, x_start:x_end]
+
+    hsv = rgb_to_hsv(center_crop)
+    H = hsv[:, :, 0]
+    S = hsv[:, :, 1]
+
+    mask = S > 0.25
+    valid_hues = H[mask]
+
+    if valid_hues.size == 0:
+        risk_color = "unknown"
+    else:
+        mean_hue = float(np.mean(valid_hues))
+
+        if 85 <= mean_hue <= 160:
+            risk_color = "green"
+        elif 60 <= mean_hue < 85:
+            risk_color = "light_green"
+        elif 40 <= mean_hue < 60:
+            risk_color = "grey"
+        elif 20 <= mean_hue < 40:
+            risk_color = "yellow"
+        elif 10 <= mean_hue < 20:
+            risk_color = "orange"
+        else:
+            risk_color = "red"
+
+    return {
+        "homeostasis_score": total_score,
+        "risk_color": risk_color,
+    }
+
 def process_pdf(pdf_bytes: bytes) -> dict:
 
     if not pdf_bytes.startswith(b"%PDF"):
@@ -216,7 +317,19 @@ def process_pdf(pdf_bytes: bytes) -> dict:
             "error": "Invalid or corrupted PDF file",
             "results": {},
         }
+    # ── Compute Homeostasis (page 0) ──
+homeostasis = None
 
+if len(doc) > 0:
+    zoom = TARGET_DPI / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+    pix = doc[0].get_pixmap(matrix=mat, alpha=False)
+
+    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, 3
+    )
+
+    homeostasis = compute_homeostasis_metrics(img_array)
     DISEASE_LAYOUT = {
         1: DISEASE_BAR_BANDS_PAGE_1,
         2: DISEASE_BAR_BANDS_PAGE_2,
@@ -280,12 +393,12 @@ def process_pdf(pdf_bytes: bytes) -> dict:
     doc.close()
 
     return {
-        "success": True,
-        "engine_version": "v3.2-multi-page-clean",
-        "page_index": "multi-page",
-        "results": results,
-        "errors": errors if errors else None,
-    }
+    "success": True,
+    "engine_version": "v3.3-homeostasis",
+    "homeostasis": homeostasis,
+    "results": results,
+    "errors": errors if errors else None,
+}
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "v3.2-multi-page-clean"})
