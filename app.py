@@ -39,7 +39,7 @@ PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY", "")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MIN_DPI = 300
-TARGET_DPI = 400
+TARGET_DPI = 300
 MIN_BAR_WIDTH_RATIO = 0.03  # 3% of total bar width
 
 # ── No global HSV constants needed ────────────────────────────────────────────
