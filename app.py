@@ -317,19 +317,21 @@ def process_pdf(pdf_bytes: bytes) -> dict:
             "error": "Invalid or corrupted PDF file",
             "results": {},
         }
+
     # ── Compute Homeostasis (page 0) ──
-homeostasis = None
+    homeostasis = None
 
-if len(doc) > 0:
-    zoom = TARGET_DPI / 72.0
-    mat = fitz.Matrix(zoom, zoom)
-    pix = doc[0].get_pixmap(matrix=mat, alpha=False)
+    if len(doc) > 0:
+        zoom = TARGET_DPI / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = doc[0].get_pixmap(matrix=mat, alpha=False)
 
-    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-        pix.height, pix.width, 3
-    )
+        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.height, pix.width, 3
+        )
 
-    homeostasis = compute_homeostasis_metrics(img_array)
+        homeostasis = compute_homeostasis_metrics(img_array)
+
     DISEASE_LAYOUT = {
         1: DISEASE_BAR_BANDS_PAGE_1,
         2: DISEASE_BAR_BANDS_PAGE_2,
@@ -390,7 +392,7 @@ if len(doc) > 0:
                 results[disease_name] = None
                 errors.append(f"{disease_name}: {str(e)}")
 
-                doc.close()
+    doc.close()
 
     return {
         "success": True,
