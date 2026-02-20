@@ -85,12 +85,12 @@ DISEASE_BAR_BANDS_PAGE_2 = [
     ("respiratory_disorders", 0.43, 0.47),
     ("kidney_function_disorders", 0.48, 0.52),
 
-    # Shifted slightly upward (−0.02)
-    ("digestive_disorders", 0.51, 0.55),
-    ("major_depression", 0.56, 0.60),
-    ("adhd_children_learning", 0.61, 0.65),
-    ("cerebral_dopamine_decreased", 0.66, 0.70),
-    ("cerebral_serotonin_decreased", 0.71, 0.75),
+    # Slight uniform upward shift (−0.01 from original)
+    ("digestive_disorders", 0.52, 0.56),
+    ("major_depression", 0.57, 0.61),
+    ("adhd_children_learning", 0.62, 0.66),
+    ("cerebral_dopamine_decreased", 0.67, 0.71),
+    ("cerebral_serotonin_decreased", 0.72, 0.76),
 ]
 
 def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
