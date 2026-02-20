@@ -56,25 +56,39 @@ HORIZONTAL_PAD_PCT = 0.05
 # Disease bars are located on the "Disease Screening Score" page.
 # The page typically contains 18 horizontal bars stacked vertically.
 # These Y-ranges are approximate and may need calibration per layout version.
-DISEASE_BAR_BANDS = [
-    ("atherosclerosis", 0.165, 0.195),
-    ("lv_hypertrophy", 0.200, 0.230),
-    ("large_artery_stiffness", 0.235, 0.265),
-    ("small_medium_artery_stiffness", 0.270, 0.300),
-    ("peripheral_vessels", 0.305, 0.335),
-    ("diabetes_screening", 0.340, 0.370),
-    ("insulin_resistance", 0.375, 0.405),
-    ("metabolic_syndrome", 0.410, 0.440),
-    ("ldl_cholesterol", 0.445, 0.475),
-    ("chronic_hepatitis", 0.480, 0.510),
-    ("hepatic_fibrosis", 0.515, 0.545),
-    ("kidney_function", 0.550, 0.580),
-    ("digestive_disorders", 0.585, 0.615),
-    ("respiratory", 0.620, 0.650),
-    ("hyperthyroidism", 0.655, 0.685),
-    ("hypothyroidism", 0.690, 0.720),
-    ("major_depression", 0.725, 0.755),
-    ("tissue_inflammatory_process", 0.760, 0.790),
+# ── ES Teck Disease Bar Layout ───────────────────────────────────────────────
+# Page 1 (12 bars)
+
+DISEASE_BAR_BANDS_PAGE_1 = [
+    ("large_artery_stiffness", 0.18, 0.22),
+    ("peripheral_vessels", 0.23, 0.27),
+    ("blood_pressure_uncontrolled", 0.28, 0.32),
+    ("small_medium_artery_stiffness", 0.33, 0.37),
+    ("atherosclerosis", 0.38, 0.42),
+    ("ldl_cholesterol", 0.43, 0.47),
+    ("lv_hypertrophy", 0.48, 0.52),
+    ("metabolic_syndrome", 0.53, 0.57),
+    ("insulin_resistance", 0.58, 0.62),
+    ("beta_cell_function_decreased", 0.63, 0.67),
+    ("blood_glucose_uncontrolled", 0.68, 0.72),
+    ("tissue_inflammatory_process", 0.73, 0.77),
+]
+
+# Page 2 (12 bars)
+
+DISEASE_BAR_BANDS_PAGE_2 = [
+    ("hypothyroidism", 0.18, 0.22),
+    ("hyperthyroidism", 0.23, 0.27),
+    ("hepatic_fibrosis", 0.28, 0.32),
+    ("chronic_hepatitis", 0.33, 0.37),
+    ("prostate_cancer", 0.38, 0.42),
+    ("respiratory_disorders", 0.43, 0.47),
+    ("kidney_function_disorders", 0.48, 0.52),
+    ("digestive_disorders", 0.53, 0.57),
+    ("major_depression", 0.58, 0.62),
+    ("adhd_children_learning", 0.63, 0.67),
+    ("cerebral_dopamine_decreased", 0.68, 0.72),
+    ("cerebral_serotonin_decreased", 0.73, 0.77),
 ]
 
 def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
@@ -187,7 +201,6 @@ def compute_bar_metrics(
     }
 def process_pdf(pdf_bytes: bytes) -> dict:
 
-    # Fast header validation (deterministic guard)
     if not pdf_bytes.startswith(b"%PDF"):
         return {
             "success": False,
@@ -204,17 +217,83 @@ def process_pdf(pdf_bytes: bytes) -> dict:
             "results": {},
         }
 
-    DS_PAGE_INDEX = 1
+    DISEASE_LAYOUT = {
+        1: DISEASE_BAR_BANDS_PAGE_1,
+        2: DISEASE_BAR_BANDS_PAGE_2,
+    }
 
-    if len(doc) <= DS_PAGE_INDEX:
-        doc.close()
-        return {
-            "success": False,
-            "error": f"PDF has only {len(doc)} pages; expected >= {DS_PAGE_INDEX + 1}",
-            "results": {},
-        }
+    results = {}
+    errors = []
 
-    page = doc[DS_PAGE_INDEX]
+    for page_index, band_list in DISEASE_LAYOUT.items():
+
+        if page_index >= len(doc):
+            continue
+
+        page = doc[page_index]
+
+        zoom = TARGET_DPI / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+
+        actual_dpi_x = pix.width / (page.rect.width / 72.0)
+        if actual_dpi_x < MIN_DPI:
+            doc.close()
+            return {
+                "success": False,
+                "error": f"Rendered resolution {actual_dpi_x:.0f} DPI < minimum {MIN_DPI} DPI",
+                "results": {},
+            }
+
+        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.height, pix.width, 3
+        )
+
+        page_height = pix.height
+        page_width = pix.width
+
+        x_start = int(page_width * HORIZONTAL_PAD_PCT)
+        x_end = int(page_width * (1.0 - HORIZONTAL_PAD_PCT))
+        bar_total_width = x_end - x_start
+
+        for disease_name, top_pct, bottom_pct in band_list:
+            try:
+                y_start = int(page_height * top_pct)
+                y_end = int(page_height * bottom_pct)
+
+                if y_end <= y_start or y_end > page_height:
+                    results[disease_name] = None
+                    continue
+
+                bar_crop = img_array[y_start:y_end, x_start:x_end]
+
+                if bar_crop.size == 0:
+                    results[disease_name] = None
+                    continue
+
+                hsv = rgb_to_hsv(bar_crop)
+
+                metrics = compute_bar_metrics(
+                    hsv,
+                    bar_total_width,
+                    bar_name=disease_name,
+                )
+
+                results[disease_name] = metrics
+
+            except Exception as e:
+                results[disease_name] = None
+                errors.append(f"{disease_name}: {str(e)}")
+
+    doc.close()
+
+    return {
+        "success": True,
+        "engine_version": "v3.1-production-locked",
+        "page_index": "multi-page",
+        "results": results,
+        "errors": errors if errors else None,
+    }
 
     zoom = TARGET_DPI / 72.0
     mat = fitz.Matrix(zoom, zoom)
