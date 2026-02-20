@@ -398,7 +398,7 @@ if len(doc) > 0:
     "homeostasis": homeostasis,
     "results": results,
     "errors": errors if errors else None,
-}
+    }
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "v3.2-multi-page-clean"})
