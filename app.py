@@ -166,36 +166,36 @@ def compute_bar_metrics(
     progression_percent = round((fill_width / bar_width) * 100)
     progression_percent = max(0, min(100, progression_percent))
 
-    # RIGHT EDGE hue sampling (more stable zone)
-    EDGE_OFFSET = 12
-    EDGE_WIDTH = 5
-    
-    edge_start = max(first_x, last_x - EDGE_OFFSET - EDGE_WIDTH + 1)
-    edge_end = edge_start + EDGE_WIDTH
+    # CENTER fill hue sampling (stable zone)
 
-    edge_h = H[:, edge_start:edge_end]
-    edge_s = S[:, edge_start:edge_end]
-    edge_v = V[:, edge_start:edge_end]
+center_x = first_x + (fill_width // 2)
+sample_width = 6
 
-    valid_mask = (edge_s > SAT_GATE) & (edge_v > VAL_GATE)
-    valid_hues = edge_h[valid_mask]
+left = max(first_x, center_x - sample_width // 2)
+right = min(last_x + 1, left + sample_width)
 
-    
-    if valid_hues.size == 0:
-        return {
-            "progression_percent": progression_percent,
-            "colorPresence": None,
-        }
-    
-    edge_hue = float(np.mean(valid_hues))
+center_h = H[:, left:right]
+center_s = S[:, left:right]
+center_v = V[:, left:right]
 
-    if bar_name == "digestive_disorders":
-        print("Digestive edge hue:", edge_hue)
-    
-    hasGreen  = 85 <= edge_hue <= 160
-    hasYellow = 15 <= edge_hue < 85
-    hasOrange = False
-    hasRed    = edge_hue < 15 or edge_hue > 160
+valid_mask = (center_s > SAT_GATE) & (center_v > VAL_GATE)
+valid_hues = center_h[valid_mask]
+
+if valid_hues.size == 0:
+    return {
+        "progression_percent": progression_percent,
+        "colorPresence": None,
+    }
+
+edge_hue = float(np.mean(valid_hues))
+
+if bar_name == "digestive_disorders":
+    print("Digestive center hue:", edge_hue)
+
+hasGreen  = 85 <= edge_hue <= 160
+hasYellow = 15 <= edge_hue < 85
+hasOrange = False
+hasRed    = edge_hue < 15 or edge_hue > 160
     
 
     return {
