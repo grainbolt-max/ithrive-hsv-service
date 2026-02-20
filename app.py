@@ -390,15 +390,15 @@ if len(doc) > 0:
                 results[disease_name] = None
                 errors.append(f"{disease_name}: {str(e)}")
 
-    doc.close()
-
-    return {
-    "success": True,
-    "engine_version": "v3.3-homeostasis",
-    "homeostasis": homeostasis,
-    "results": results,
-    "errors": errors if errors else None,
-    }
+        doc.close()
+    
+        return {
+        "success": True,
+        "engine_version": "v3.3-homeostasis",
+        "homeostasis": homeostasis,
+        "results": results,
+        "errors": errors if errors else None,
+        }
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "v3.2-multi-page-clean"})
