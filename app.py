@@ -232,30 +232,43 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
             continue
 
         gray = np.mean(crop, axis=2)
-        dark_pixels = gray < 80
+        binary = gray < 100  # digit is dark
         
-        col_projection = dark_pixels.sum(axis=0)
-        cols = np.where(col_projection > 5)[0]
+        # Remove noise by ignoring thin rows
+        row_sum = binary.sum(axis=1)
+        valid_rows = np.where(row_sum > 10)[0]
         
-        if len(cols) == 0:
+        if len(valid_rows) == 0:
             continue
         
-        digit_width = cols[-1] - cols[0]
+        digit_region = binary[valid_rows[0]:valid_rows[-1], :]
         
-        # Width-based deterministic mapping
-        # Calibrated width thresholds for ES Teck 300 DPI
-        if digit_width < 22:
+        # Count vertical stroke segments
+        col_sum = digit_region.sum(axis=0)
+        segments = np.where(col_sum > 15)[0]
+        
+        if len(segments) == 0:
+            continue
+        
+        # Count distinct groups of columns
+        group_count = 1
+        for i in range(1, len(segments)):
+            if segments[i] - segments[i-1] > 3:
+                group_count += 1
+        
+        # Deterministic mapping for ES Teck digits
+        if group_count == 1:
             value = 1
-        elif digit_width < 30:
-            value = 2
-        elif digit_width < 38:
-            value = 3
-        elif digit_width < 46:
+        elif group_count == 2:
             value = 4
-        else:
+        elif group_count == 3:
+            value = 3
+        elif group_count == 4:
             value = 5
-        
-        total_score += value
+        else:
+            value = 2
+
+total_score += value
 
     # ─────────────────────────────────────────────
     # 2. Detect center box risk color
