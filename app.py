@@ -236,15 +236,6 @@ def process_pdf(pdf_bytes: bytes) -> dict:
         mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat, alpha=False)
 
-        actual_dpi_x = pix.width / (page.rect.width / 72.0)
-        if actual_dpi_x < MIN_DPI:
-            doc.close()
-            return {
-                "success": False,
-                "error": f"Rendered resolution {actual_dpi_x:.0f} DPI < minimum {MIN_DPI} DPI",
-                "results": {},
-            }
-
         img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
             pix.height, pix.width, 3
         )
@@ -257,11 +248,12 @@ def process_pdf(pdf_bytes: bytes) -> dict:
         bar_total_width = x_end - x_start
 
         for disease_name, top_pct, bottom_pct in band_list:
+
             try:
                 y_start = int(page_height * top_pct)
                 y_end = int(page_height * bottom_pct)
 
-                if y_end <= y_start or y_end > page_height:
+                if y_end <= y_start:
                     results[disease_name] = None
                     continue
 
@@ -289,82 +281,11 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 
     return {
         "success": True,
-        "engine_version": "v3.1-production-locked",
+        "engine_version": "v3.2-multi-page-clean",
         "page_index": "multi-page",
         "results": results,
         "errors": errors if errors else None,
     }
-
-    zoom = TARGET_DPI / 72.0
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-
-    actual_dpi_x = pix.width / (page.rect.width / 72.0)
-
-    if actual_dpi_x < MIN_DPI:
-        doc.close()
-        return {
-            "success": False,
-            "error": f"Rendered resolution {actual_dpi_x:.0f} DPI < minimum {MIN_DPI} DPI",
-            "results": {},
-        }
-
-    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-        pix.height, pix.width, 3
-    )
-
-    page_height = pix.height
-    page_width = pix.width
-
-    x_start = int(page_width * HORIZONTAL_PAD_PCT)
-    x_end = int(page_width * (1.0 - HORIZONTAL_PAD_PCT))
-    bar_total_width = x_end - x_start
-
-    results = {}
-    errors = []
-
-    for disease_name, top_pct, bottom_pct in DISEASE_BAR_BANDS:
-        try:
-            y_start = int(page_height * top_pct)
-            y_end = int(page_height * bottom_pct)
-
-            if y_end <= y_start or y_end > page_height:
-                results[disease_name] = None
-                errors.append(f"{disease_name}: invalid crop region")
-                continue
-
-            bar_crop = img_array[y_start:y_end, x_start:x_end]
-
-            if bar_crop.size == 0:
-                results[disease_name] = None
-                errors.append(f"{disease_name}: empty crop")
-                continue
-
-            hsv = rgb_to_hsv(bar_crop)
-
-            metrics = compute_bar_metrics(
-                hsv,
-                bar_total_width,
-                bar_name=disease_name,
-            )
-
-            results[disease_name] = metrics
-
-        except Exception as e:
-            results[disease_name] = None
-            errors.append(f"{disease_name}: {str(e)}")
-
-    doc.close()
-
-    return {
-        "success": True,
-        "engine_version": "v3.0-stable-precleaned-input",
-        "page_index": DS_PAGE_INDEX,
-        "resolution_dpi": round(actual_dpi_x),
-        "results": results,
-        "errors": errors if errors else None,
-    }
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": "v3.0-stable-precleaned-input"})
