@@ -168,34 +168,34 @@ def compute_bar_metrics(
 
     # CENTER fill hue sampling (stable zone)
 
-center_x = first_x + (fill_width // 2)
-sample_width = 6
-
-left = max(first_x, center_x - sample_width // 2)
-right = min(last_x + 1, left + sample_width)
-
-center_h = H[:, left:right]
-center_s = S[:, left:right]
-center_v = V[:, left:right]
-
-valid_mask = (center_s > SAT_GATE) & (center_v > VAL_GATE)
-valid_hues = center_h[valid_mask]
-
-if valid_hues.size == 0:
-    return {
-        "progression_percent": progression_percent,
-        "colorPresence": None,
-    }
-
-edge_hue = float(np.mean(valid_hues))
-
-if bar_name == "digestive_disorders":
-    print("Digestive center hue:", edge_hue)
-
-hasGreen  = 85 <= edge_hue <= 160
-hasYellow = 15 <= edge_hue < 85
-hasOrange = False
-hasRed    = edge_hue < 15 or edge_hue > 160
+    center_x = first_x + (fill_width // 2)
+    sample_width = 6
+    
+    left = max(first_x, center_x - sample_width // 2)
+    right = min(last_x + 1, left + sample_width)
+    
+    center_h = H[:, left:right]
+    center_s = S[:, left:right]
+    center_v = V[:, left:right]
+    
+    valid_mask = (center_s > SAT_GATE) & (center_v > VAL_GATE)
+    valid_hues = center_h[valid_mask]
+    
+    if valid_hues.size == 0:
+        return {
+            "progression_percent": progression_percent,
+            "colorPresence": None,
+        }
+    
+    edge_hue = float(np.mean(valid_hues))
+    
+    if bar_name == "digestive_disorders":
+        print("Digestive center hue:", edge_hue)
+    
+    hasGreen  = 85 <= edge_hue <= 160
+    hasYellow = 15 <= edge_hue < 85
+    hasOrange = False
+    hasRed    = edge_hue < 15 or edge_hue > 160
     
 
     return {
