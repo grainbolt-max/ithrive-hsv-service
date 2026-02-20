@@ -178,8 +178,7 @@ def compute_bar_metrics(
     center_s = S[:, left:right]
     center_v = V[:, left:right]
     
-    valid_mask = (center_s > SAT_GATE) & (center_v > VAL_GATE)
-    valid_hues = center_h[valid_mask]
+    valid_hues = center_h.flatten()
     
     if valid_hues.size == 0:
         return {
