@@ -57,26 +57,25 @@ HORIZONTAL_PAD_PCT = 0.05
 # The page typically contains 18 horizontal bars stacked vertically.
 # These Y-ranges are approximate and may need calibration per layout version.
 DISEASE_BAR_BANDS = [
-    ("atherosclerosis", 0.155, 0.185),
-    ("lv_hypertrophy", 0.190, 0.220),
-    ("large_artery_stiffness", 0.225, 0.255),
-    ("small_medium_artery_stiffness", 0.260, 0.290),
-    ("peripheral_vessels", 0.295, 0.325),
-    ("diabetes_screening", 0.330, 0.360),
-    ("insulin_resistance", 0.365, 0.395),
-    ("metabolic_syndrome", 0.400, 0.430),
-    ("ldl_cholesterol", 0.435, 0.465),
-    ("chronic_hepatitis", 0.470, 0.500),
-    ("hepatic_fibrosis", 0.505, 0.535),
-    ("kidney_function", 0.540, 0.570),
-    ("digestive_disorders", 0.575, 0.605),
-    ("respiratory", 0.610, 0.640),
-    ("hyperthyroidism", 0.645, 0.675),
-    ("hypothyroidism", 0.680, 0.710),
-    ("major_depression", 0.715, 0.745),
-    ("tissue_inflammatory_process", 0.750, 0.780),
+    ("atherosclerosis", 0.165, 0.195),
+    ("lv_hypertrophy", 0.200, 0.230),
+    ("large_artery_stiffness", 0.235, 0.265),
+    ("small_medium_artery_stiffness", 0.270, 0.300),
+    ("peripheral_vessels", 0.305, 0.335),
+    ("diabetes_screening", 0.340, 0.370),
+    ("insulin_resistance", 0.375, 0.405),
+    ("metabolic_syndrome", 0.410, 0.440),
+    ("ldl_cholesterol", 0.445, 0.475),
+    ("chronic_hepatitis", 0.480, 0.510),
+    ("hepatic_fibrosis", 0.515, 0.545),
+    ("kidney_function", 0.550, 0.580),
+    ("digestive_disorders", 0.585, 0.615),
+    ("respiratory", 0.620, 0.650),
+    ("hyperthyroidism", 0.655, 0.685),
+    ("hypothyroidism", 0.690, 0.720),
+    ("major_depression", 0.725, 0.755),
+    ("tissue_inflammatory_process", 0.760, 0.790),
 ]
-
 
 def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
     """
