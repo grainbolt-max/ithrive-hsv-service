@@ -205,7 +205,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
             "results": {},
         }
 
-    DS_PAGE_INDEX = 2
+    DS_PAGE_INDEX = 1
 
     if len(doc) <= DS_PAGE_INDEX:
         doc.close()
