@@ -159,24 +159,34 @@ def compute_bar_metrics(
     progression_percent = round((fill_width / bar_width) * 100)
     progression_percent = max(0, min(100, progression_percent))
 
-    # STEP 2 — Determine dominant hue inside fill region
-    hue_slice = H[:, first_x:last_x + 1]
-    sat_slice = S[:, first_x:last_x + 1]
+    # STEP 2 — Determine severity color from RIGHT EDGE ONLY
+# Use a narrow vertical slice at the last filled pixel
 
-    valid_pixels = hue_slice[sat_slice > SAT_GATE]
+EDGE_WIDTH = 3  # number of columns to sample
+edge_start = max(first_x, last_x - EDGE_WIDTH + 1)
+edge_end = last_x + 1
 
-    if len(valid_pixels) == 0:
-        return {
-            "progression_percent": progression_percent,
-            "colorPresence": None,
-        }
+edge_h = H[:, edge_start:edge_end]
+edge_s = S[:, edge_start:edge_end]
+edge_v = V[:, edge_start:edge_end]
 
-    dominant_hue = float(np.median(valid_pixels))
+# Only count sufficiently saturated + bright pixels
+valid_mask = (edge_s > SAT_GATE) & (edge_v > VAL_GATE)
+valid_hues = edge_h[valid_mask]
 
-    hasGreen = 65 <= dominant_hue <= 160
-    hasYellow = 28 <= dominant_hue < 65
-    hasOrange = 15 <= dominant_hue < 28
-    hasRed = dominant_hue < 15 or dominant_hue > 160
+if valid_hues.size == 0:
+    return {
+        "progression_percent": progression_percent,
+        "colorPresence": None,
+    }
+
+# Use median hue from right-edge slice
+edge_hue = float(np.median(valid_hues))
+
+hasGreen = 65 <= edge_hue <= 160
+hasYellow = 28 <= edge_hue < 65
+hasOrange = 15 <= edge_hue < 28
+hasRed = edge_hue < 15 or edge_hue > 160
 
     return {
         "progression_percent": progression_percent,
