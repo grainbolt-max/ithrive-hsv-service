@@ -121,8 +121,9 @@ def compute_bar_metrics(
     S = hsv_img[:, :, 1]
     V = hsv_img[:, :, 2]
 
-    SAT_GATE = 0.45
-    VAL_GATE = 0.35
+    SAT_GATE = 0.55
+    VAL_GATE = 0.45
+    
 
     fill_mask = (S > SAT_GATE) & (V > VAL_GATE)
 
