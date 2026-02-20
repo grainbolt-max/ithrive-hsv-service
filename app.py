@@ -296,7 +296,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
     }
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v3.0-stable-precleaned-input"})
+    return jsonify({"status": "ok", "version": "v3.2-multi-page-clean"})
 
 @app.route("/preprocess", methods=["POST"])
 def preprocess():
