@@ -295,13 +295,9 @@ def health():
 @app.route("/preprocess", methods=["POST"])
 def preprocess():
     """
-    POST /preprocess
-
-    Headers:
-      Authorization: Bearer <PREPROCESS_API_KEY>
-
-    Body (multipart/form-data):
-      - file: PDF file
+    Supports BOTH:
+    - multipart/form-data with file
+    - application/json with pdf_base64
     """
 
     # ---- Auth check ----
@@ -310,35 +306,48 @@ def preprocess():
         if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
             return jsonify({"error": "Unauthorized"}), 401
 
-    # ---- Validate file ----
-    if "file" not in request.files:
-        return jsonify({"error": "file is required"}), 400
+    pdf_bytes = None
 
-    file = request.files["file"]
+    # ---- OPTION 1: Multipart file upload ----
+    if "file" in request.files:
+        file = request.files["file"]
 
-    if file.filename == "":
-        return jsonify({"error": "No file selected"}), 400
+        if file.filename == "":
+            return jsonify({"error": "No file selected"}), 400
 
-    if not file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Only PDF files are allowed"}), 400
+        try:
+            pdf_bytes = file.read()
+        except Exception:
+            return jsonify({"error": "Failed to read uploaded file"}), 400
 
-    try:
-        pdf_bytes = file.read()
+    # ---- OPTION 2: JSON base64 upload (legacy support) ----
+    elif request.is_json:
+        data = request.get_json(silent=True)
 
-        if not pdf_bytes:
-            return jsonify({"error": "Empty file uploaded"}), 400
+        if not data or "pdf_base64" not in data:
+            return jsonify({"error": "pdf_base64 is required"}), 400
 
-        if not pdf_bytes.startswith(b"%PDF"):
-            return jsonify({"error": "Invalid PDF file"}), 400
+        try:
+            import base64
+            pdf_bytes = base64.b64decode(data["pdf_base64"])
+        except Exception:
+            return jsonify({"error": "Invalid base64 encoding"}), 400
 
-    except Exception:
-        return jsonify({"error": "Failed to read uploaded file"}), 400
+    else:
+        return jsonify({"error": "No valid upload format detected"}), 400
 
-    # ---- Process PDF ----
+    # ---- Validate PDF header ----
+    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+        return jsonify({
+            "success": False,
+            "error": "Invalid PDF file",
+            "results": {}
+        }), 400
+
+    # ---- Process ----
     try:
         result = process_pdf(pdf_bytes)
         return jsonify(result), 200
-
     except Exception as e:
         return jsonify({
             "success": False,
