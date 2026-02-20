@@ -116,26 +116,16 @@ def compute_bar_metrics(
     bar_width: int,
     bar_name: str = ""
 ) -> dict[str, Any] | None:
-    """
-    Stable logic used before legend interference.
-
-    1. Detect fill using high saturation mask.
-    2. Find horizontal fill region.
-    3. Compute progression_percent.
-    4. Determine dominant hue inside fill.
-    """
 
     H = hsv_img[:, :, 0]
     S = hsv_img[:, :, 1]
     V = hsv_img[:, :, 2]
 
-    # STEP 1 — Detect colored fill only
     SAT_GATE = 0.45
     VAL_GATE = 0.35
 
     fill_mask = (S > SAT_GATE) & (V > VAL_GATE)
 
-    # Horizontal projection
     projection = fill_mask.any(axis=0)
     nonzero = np.where(projection)[0]
 
@@ -155,46 +145,44 @@ def compute_bar_metrics(
             "progression_percent": 0,
             "colorPresence": None,
         }
-progression_percent = round((fill_width / bar_width) * 100)
-progression_percent = max(0, min(100, progression_percent))
 
-# STEP 2 — Determine severity color from RIGHT EDGE ONLY
-# Use a narrow vertical slice at the last filled pixel
+    progression_percent = round((fill_width / bar_width) * 100)
+    progression_percent = max(0, min(100, progression_percent))
 
-EDGE_WIDTH = 3
-edge_start = max(first_x, last_x - EDGE_WIDTH + 1)
-edge_end = last_x + 1
+    # RIGHT EDGE hue sampling
+    EDGE_WIDTH = 3
+    edge_start = max(first_x, last_x - EDGE_WIDTH + 1)
+    edge_end = last_x + 1
 
-edge_h = H[:, edge_start:edge_end]
-edge_s = S[:, edge_start:edge_end]
-edge_v = V[:, edge_start:edge_end]
+    edge_h = H[:, edge_start:edge_end]
+    edge_s = S[:, edge_start:edge_end]
+    edge_v = V[:, edge_start:edge_end]
 
-valid_mask = (edge_s > SAT_GATE) & (edge_v > VAL_GATE)
-valid_hues = edge_h[valid_mask]
+    valid_mask = (edge_s > SAT_GATE) & (edge_v > VAL_GATE)
+    valid_hues = edge_h[valid_mask]
 
-if valid_hues.size == 0:
+    if valid_hues.size == 0:
+        return {
+            "progression_percent": progression_percent,
+            "colorPresence": None,
+        }
+
+    edge_hue = float(np.median(valid_hues))
+
+    hasGreen = 65 <= edge_hue <= 160
+    hasYellow = 28 <= edge_hue < 65
+    hasOrange = 15 <= edge_hue < 28
+    hasRed = edge_hue < 15 or edge_hue > 160
+
     return {
         "progression_percent": progression_percent,
-        "colorPresence": None,
+        "colorPresence": {
+            "hasGreen": hasGreen,
+            "hasYellow": hasYellow,
+            "hasOrange": hasOrange,
+            "hasRed": hasRed,
+        },
     }
-
-edge_hue = float(np.median(valid_hues))
-
-hasGreen = 65 <= edge_hue <= 160
-hasYellow = 28 <= edge_hue < 65
-hasOrange = 15 <= edge_hue < 28
-hasRed = edge_hue < 15 or edge_hue > 160
-
-return {
-    "progression_percent": progression_percent,
-    "colorPresence": {
-        "hasGreen": hasGreen,
-        "hasYellow": hasYellow,
-        "hasOrange": hasOrange,
-        "hasRed": hasRed,
-    },
-}
-
 def process_pdf(pdf_bytes: bytes) -> dict:
 
     # Fast header validation (deterministic guard)
