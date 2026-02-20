@@ -165,9 +165,10 @@ def compute_bar_metrics(
     progression_percent = max(0, min(100, progression_percent))
 
     # RIGHT EDGE hue sampling
+    EDGE_OFFSET = 6
     EDGE_WIDTH = 3
-    edge_start = max(first_x, last_x - EDGE_WIDTH + 1)
-    edge_end = last_x + 1
+    edge_start = max(first_x, last_x - EDGE_OFFSET - EDGE_WIDTH + 1)
+    edge_end   = edge_start + EDGE_WIDTH
 
     edge_h = H[:, edge_start:edge_end]
     edge_s = S[:, edge_start:edge_end]
