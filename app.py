@@ -134,7 +134,7 @@ def compute_bar_metrics(
     S = hsv_img[:, :, 1]
     V = hsv_img[:, :, 2]
 
-    SAT_GATE = 0.80
+    SAT_GATE = 0.55
     VAL_GATE = 0.60
     
     
