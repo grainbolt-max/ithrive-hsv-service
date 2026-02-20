@@ -138,8 +138,6 @@ def compute_bar_metrics(
 
     SAT_GATE = 0.35
     VAL_GATE = 0.50
-    
-    
 
     fill_mask = (S > SAT_GATE) & (V > VAL_GATE)
 
@@ -166,46 +164,41 @@ def compute_bar_metrics(
     progression_percent = round((fill_width / bar_width) * 100)
     progression_percent = max(0, min(100, progression_percent))
 
-    # CENTER fill hue sampling (stable zone)
-
-    center_x = first_x + (fill_width // 2)
-    sample_width = 6
-    
-    left = max(first_x, center_x - sample_width // 2)
-    right = min(last_x + 1, left + sample_width)
-    
-    center_h = H[:, left:right]
-    center_s = S[:, left:right]
-    center_v = V[:, left:right]
-    
-    valid_hues = center_h.flatten()
-    
-    if valid_hues.size == 0:
-        return {
-            "progression_percent": progression_percent,
-            "colorPresence": None,
+    # Severity mapping based on fill width
+    if progression_percent <= 20:
+        severity = {
+            "hasGreen": True,
+            "hasYellow": False,
+            "hasOrange": False,
+            "hasRed": False,
         }
-    
-    edge_hue = float(np.mean(valid_hues))
-    
-    if bar_name == "digestive_disorders":
-        print("Digestive center hue:", edge_hue)
-    
-    hasGreen  = 85 <= edge_hue <= 160
-    hasYellow = 15 <= edge_hue < 85
-    hasOrange = False
-    hasRed    = edge_hue < 15 or edge_hue > 160
-    
+    elif progression_percent <= 60:
+        severity = {
+            "hasGreen": False,
+            "hasYellow": True,
+            "hasOrange": False,
+            "hasRed": False,
+        }
+    elif progression_percent <= 80:
+        severity = {
+            "hasGreen": False,
+            "hasYellow": False,
+            "hasOrange": True,
+            "hasRed": False,
+        }
+    else:
+        severity = {
+            "hasGreen": False,
+            "hasYellow": False,
+            "hasOrange": False,
+            "hasRed": True,
+        }
 
     return {
         "progression_percent": progression_percent,
-        "colorPresence": {
-            "hasGreen": hasGreen,
-            "hasYellow": hasYellow,
-            "hasOrange": hasOrange,
-            "hasRed": hasRed,
-        },
+        "colorPresence": severity,
     }
+       
 def process_pdf(pdf_bytes: bytes) -> dict:
 
     if not pdf_bytes.startswith(b"%PDF"):
