@@ -162,14 +162,14 @@ def compute_bar_metrics(
     valid_mask = (edge_s > SAT_GATE) & (edge_v > VAL_GATE)
     valid_hues = edge_h[valid_mask]
 
+    
     if valid_hues.size == 0:
         return {
             "progression_percent": progression_percent,
             "colorPresence": None,
         }
-
-    edge_hue = float(np.median(valid_hues))
-
+    
+    edge_hue = float(np.mean(valid_hues))
     hasGreen  = 70 <= edge_hue <= 160
     hasYellow = 20 <= edge_hue < 70
     hasOrange = False
