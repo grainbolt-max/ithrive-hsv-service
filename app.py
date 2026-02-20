@@ -243,13 +243,14 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
         digit_width = cols[-1] - cols[0]
         
         # Width-based deterministic mapping
-        if digit_width < 8:
+        # Calibrated width thresholds for ES Teck 300 DPI
+        if digit_width < 22:
             value = 1
-        elif digit_width < 14:
+        elif digit_width < 30:
             value = 2
-        elif digit_width < 18:
+        elif digit_width < 38:
             value = 3
-        elif digit_width < 22:
+        elif digit_width < 46:
             value = 4
         else:
             value = 5
@@ -270,15 +271,16 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
     hsv = rgb_to_hsv(center_crop)
     H = hsv[:, :, 0]
     S = hsv[:, :, 1]
-
-    mask = S > 0.25
+    V = hsv[:, :, 2]
+    
+    mask = (S > 0.35) & (V > 0.60)
     valid_hues = H[mask]
-
+    
     if valid_hues.size == 0:
         risk_color = "unknown"
     else:
         mean_hue = float(np.mean(valid_hues))
-
+    
         if 85 <= mean_hue <= 160:
             risk_color = "green"
         elif 60 <= mean_hue < 85:
