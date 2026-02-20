@@ -192,10 +192,10 @@ def compute_bar_metrics(
     if bar_name == "digestive_disorders":
         print("Digestive edge hue:", edge_hue)
     
-    hasGreen  = 75 <= edge_hue <= 160
-    hasYellow = 25 <= edge_hue < 75
+    hasGreen  = 85 <= edge_hue <= 160
+    hasYellow = 15 <= edge_hue < 85
     hasOrange = False
-    hasRed    = edge_hue < 25 or edge_hue > 160
+    hasRed    = edge_hue < 15 or edge_hue > 160
     
 
     return {
