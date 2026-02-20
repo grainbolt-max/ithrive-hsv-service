@@ -187,6 +187,10 @@ def compute_bar_metrics(
         }
     
     edge_hue = float(np.mean(valid_hues))
+
+    if bar_name == "digestive_disorders":
+        print("Digestive edge hue:", edge_hue)
+    
     hasGreen  = 75 <= edge_hue <= 160
     hasYellow = 25 <= edge_hue < 75
     hasOrange = False
