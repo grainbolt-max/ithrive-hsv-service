@@ -170,10 +170,11 @@ def compute_bar_metrics(
 
     edge_hue = float(np.median(valid_hues))
 
-    hasGreen = 65 <= edge_hue <= 160
-    hasYellow = 28 <= edge_hue < 65
-    hasOrange = 15 <= edge_hue < 28
-    hasRed = edge_hue < 15 or edge_hue > 160
+    hasGreen  = 70 <= edge_hue <= 160
+    hasYellow = 20 <= edge_hue < 70
+    hasOrange = False
+    hasRed    = edge_hue < 20 or edge_hue > 160
+    
 
     return {
         "progression_percent": progression_percent,
