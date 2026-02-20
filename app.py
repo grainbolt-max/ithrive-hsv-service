@@ -185,9 +185,9 @@ def compute_bar_metrics(
     
     edge_hue = float(np.mean(valid_hues))
     hasGreen  = 75 <= edge_hue <= 160
-    hasYellow = 35 <= edge_hue < 75
+    hasYellow = 25 <= edge_hue < 75
     hasOrange = False
-    hasRed    = edge_hue < 35 or edge_hue > 160
+    hasRed    = edge_hue < 25 or edge_hue > 160
     
 
     return {
