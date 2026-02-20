@@ -232,41 +232,38 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
             continue
 
         gray = np.mean(crop, axis=2)
-        dark_pixels = gray < 70
-
-        # Count connected dark region rows (simple digit detection)
-        row_projection = dark_pixels.sum(axis=1)
-        rows = np.where(row_projection > 5)[0]
-
-        if len(rows) == 0:
+        dark_pixels = gray < 80
+        
+        col_projection = dark_pixels.sum(axis=0)
+        cols = np.where(col_projection > 5)[0]
+        
+        if len(cols) == 0:
             continue
-
-        # Estimate class value from digit height (deterministic)
-        digit_height = rows[-1] - rows[0]
-
-        # ES Teck class values are 1–5
-        # Relative size mapping (calibrated for this layout)
-        if digit_height < 15:
+        
+        digit_width = cols[-1] - cols[0]
+        
+        # Width-based deterministic mapping
+        if digit_width < 8:
             value = 1
-        elif digit_height < 22:
+        elif digit_width < 14:
             value = 2
-        elif digit_height < 28:
+        elif digit_width < 18:
             value = 3
-        elif digit_height < 34:
+        elif digit_width < 22:
             value = 4
         else:
             value = 5
-
+        
         total_score += value
 
     # ─────────────────────────────────────────────
     # 2. Detect center box risk color
     # ─────────────────────────────────────────────
 
-    y_start = int(page_height * 0.35)
-    y_end   = int(page_height * 0.65)
-    x_start = int(page_width * 0.30)
-    x_end   = int(page_width * 0.70)
+    y_start = int(page_height * 0.42)
+    y_end   = int(page_height * 0.58)
+    x_start = int(page_width * 0.42)
+    x_end   = int(page_width * 0.58)
 
     center_crop = img_array[y_start:y_end, x_start:x_end]
 
