@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY")
 
-TARGET_DPI = 300
+TARGET_DPI = 150
 
 
 # ============================================================
