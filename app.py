@@ -1,29 +1,31 @@
+import os
 import re
 import fitz
 import pytesseract
 import tempfile
-import os
 from flask import Flask, request, jsonify
 
+# =========================
+# CONFIG
+# =========================
 API_KEY = "ithrive_secure_2026_key"
 
 app = Flask(__name__)
 
 
-# -------------------------
-# Authorization
-# -------------------------
+# =========================
+# AUTH
+# =========================
 def is_authorized(req):
     auth = req.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return False
-    token = auth.split(" ")[1]
-    return token == API_KEY
+    return auth.split(" ")[1] == API_KEY
 
 
-# -------------------------
-# Extract HRV values
-# -------------------------
+# =========================
+# SAFE HRV PARSER
+# =========================
 def extract_hrv_from_text(text):
     rmssd_match = re.search(r"RMSSD\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
     lf_hf_match = re.search(r"LF\s*/\s*HF.*?(\d+\.?\d*)", text, re.IGNORECASE)
@@ -43,9 +45,27 @@ def extract_hrv_from_text(text):
     }
 
 
-# -------------------------
-# HRV Extraction Endpoint
-# -------------------------
+# =========================
+# FREE-TIER SAFE OCR
+# =========================
+def ocr_page_low_memory(page):
+    # Very low resolution matrix to prevent OOM
+    mat = fitz.Matrix(0.6, 0.6)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        pix.save(tmp.name)
+        path = tmp.name
+
+    text = pytesseract.image_to_string(path)
+    os.remove(path)
+
+    return text
+
+
+# =========================
+# MAIN ENDPOINT
+# =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
     if not is_authorized(request):
@@ -60,41 +80,27 @@ def extract_hrv():
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        hrv_values = None
+        hrv_data = None
 
         for page in doc:
 
-            text_layer = page.get_text().lower()
-
-            if "hrv" not in text_layer:
+            # Quick filter: skip pages without HRV text layer
+            if "hrv" not in page.get_text().lower():
                 continue
 
-            # Low DPI for free tier memory safety
-            pix = page.get_pixmap(dpi=100)
+            text = ocr_page_low_memory(page)
 
-            # Force RGB (fixes Unsupported image object error)
-            if pix.alpha or pix.colorspace.n != 3:
-                pix = fitz.Pixmap(fitz.csRGB, pix)
+            hrv_data = extract_hrv_from_text(text)
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                pix.save(tmp.name)
-                tmp_path = tmp.name
-
-            ocr_text = pytesseract.image_to_string(tmp_path)
-
-            os.remove(tmp_path)
-
-            hrv_values = extract_hrv_from_text(ocr_text)
-
-            if hrv_values:
+            if hrv_data:
                 break
 
         doc.close()
 
-        if not hrv_values:
+        if not hrv_data:
             return jsonify({"error": "hrv_not_detected"}), 422
 
-        return jsonify(hrv_values)
+        return jsonify(hrv_data)
 
     except Exception as e:
         return jsonify({
@@ -103,13 +109,16 @@ def extract_hrv():
         }), 500
 
 
-# -------------------------
-# Health Check
-# -------------------------
-@app.route("/")
+# =========================
+# HEALTH CHECK
+# =========================
+@app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "hrv_ocr_service_running"})
+    return jsonify({"status": "minimal_hrv_service_running"})
 
 
+# =========================
+# START
+# =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
