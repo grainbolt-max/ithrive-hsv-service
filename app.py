@@ -40,9 +40,6 @@ def extract_hrv_from_text(text):
     text = text.replace(",", ".")
     text_lower = text.lower()
 
-    if "heart rate variability" not in text_lower and "lf/hf" not in text_lower:
-        return None
-
     rmssd_match = re.search(r"r\s*m\s*s\s*s\s*d.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
     lf_hf_match = re.search(r"l\s*f\s*[/\s]\s*h\s*f.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
     total_power_match = re.search(r"total\s*power.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
@@ -62,29 +59,49 @@ def extract_hrv_from_text(text):
 
 
 # =========================
-# ULTRA LOW MEMORY OCR
+# LIGHT OCR FOR PAGE DETECTION
 # =========================
-def ocr_page_low_memory(page):
-    # Even lower scale to prevent OOM
-    mat = fitz.Matrix(0.5, 0.5)
+def light_ocr(page):
+    mat = fitz.Matrix(0.4, 0.4)
     pix = page.get_pixmap(matrix=mat, alpha=False)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         pix.save(tmp.name)
         path = tmp.name
 
-    # Low-memory Tesseract config
-    text = pytesseract.image_to_string(
-        path,
-        config="--psm 6 --oem 1"
-    )
-
+    text = pytesseract.image_to_string(path, config="--psm 6 --oem 1")
     os.remove(path)
     return text
 
 
 # =========================
-# ENDPOINT
+# CROPPED HIGHER-QUALITY OCR (TOP REGION ONLY)
+# =========================
+def cropped_hrv_ocr(page):
+    rect = page.rect
+
+    # Top 45% of page
+    crop_rect = fitz.Rect(
+        rect.x0,
+        rect.y0,
+        rect.x1,
+        rect.y0 + rect.height * 0.45
+    )
+
+    mat = fitz.Matrix(0.9, 0.9)  # higher clarity but smaller region
+    pix = page.get_pixmap(matrix=mat, clip=crop_rect, alpha=False)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        pix.save(tmp.name)
+        path = tmp.name
+
+    text = pytesseract.image_to_string(path, config="--psm 6 --oem 1")
+    os.remove(path)
+    return text
+
+
+# =========================
+# MAIN ENDPOINT
 # =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
@@ -101,12 +118,17 @@ def extract_hrv():
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         for page in doc:
-            text = ocr_page_low_memory(page)
+            # Step 1: Light detection OCR
+            light_text = light_ocr(page).lower()
 
-            hrv_data = extract_hrv_from_text(text)
-            if hrv_data:
-                doc.close()
-                return jsonify(hrv_data)
+            if "heart rate variability" in light_text or "lf/hf" in light_text:
+                # Step 2: High-quality cropped OCR
+                detailed_text = cropped_hrv_ocr(page)
+                hrv_data = extract_hrv_from_text(detailed_text)
+
+                if hrv_data:
+                    doc.close()
+                    return jsonify(hrv_data)
 
         doc.close()
         return jsonify({"error": "hrv_not_detected"}), 422
@@ -120,7 +142,7 @@ def extract_hrv():
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ultra_low_memory_hrv_running"})
+    return jsonify({"status": "region_based_hrv_extractor_running"})
 
 
 if __name__ == "__main__":
