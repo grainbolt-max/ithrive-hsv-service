@@ -1,104 +1,45 @@
 import os
 import re
-import fitz
+import io
+import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
 import numpy as np
-from flask import Flask, jsonify, request
+import cv2
+
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
-PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY", "")
+PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY")
+
 TARGET_DPI = 300
 
 
-# ─────────────────────────────────────────────
-# RGB → HSV (for risk color only)
-# ─────────────────────────────────────────────
-def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
-    rgb = image_array.astype(np.float64) / 255.0
-    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+# ============================================================
+# Utilities
+# ============================================================
 
-    cmax = np.maximum(np.maximum(r, g), b)
-    cmin = np.minimum(np.minimum(r, g), b)
-    delta = cmax - cmin
-
-    hue = np.zeros_like(cmax)
-
-    mask_r = (cmax == r) & (delta > 0)
-    mask_g = (cmax == g) & (delta > 0)
-    mask_b = (cmax == b) & (delta > 0)
-
-    hue[mask_r] = 60 * (((g[mask_r] - b[mask_r]) / delta[mask_r]) % 6)
-    hue[mask_g] = 60 * (((b[mask_g] - r[mask_g]) / delta[mask_g]) + 2)
-    hue[mask_b] = 60 * (((r[mask_b] - g[mask_b]) / delta[mask_b]) + 4)
-
-    sat = np.where(cmax > 0, delta / cmax, 0.0)
-    val = cmax
-
-    return np.stack([hue, sat, val], axis=-1)
-
-
-# ─────────────────────────────────────────────
-# Extract Homeostasis Score via TEXT
-# ─────────────────────────────────────────────
-def extract_homeostasis_score(page) -> int | None:
-    text = page.get_text()
-    match = re.search(r"Homeostasis\s*Score\s*(\d+)", text, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-# ─────────────────────────────────────────────
-# Detect Risk Color (pixel-based)
-# ─────────────────────────────────────────────
-def detect_risk_color(page) -> str:
+def render_page_to_image(page):
     zoom = TARGET_DPI / 72.0
     mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-
-    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-        pix.height, pix.width, 3
-    )
-
-    page_height, page_width, _ = img_array.shape
-
-    y0 = int(page_height * 0.48)
-    y1 = int(page_height * 0.60)
-    x0 = int(page_width * 0.40)
-    x1 = int(page_width * 0.60)
-
-    crop = img_array[y0:y1, x0:x1]
-
-    hsv = rgb_to_hsv(crop)
-    H = hsv[:, :, 0]
-    S = hsv[:, :, 1]
-
-    mask = S > 0.15
-    valid_hues = H[mask]
-
-    if valid_hues.size == 0:
-        return "unknown"
-
-    mean_hue = float(np.mean(valid_hues))
-
-    if 85 <= mean_hue <= 160:
-        return "green"
-    elif 60 <= mean_hue < 85:
-        return "light_green"
-    elif 40 <= mean_hue < 60:
-        return "grey"
-    elif 20 <= mean_hue < 40:
-        return "yellow"
-    elif 10 <= mean_hue < 20:
-        return "orange"
-    else:
-        return "red"
+    pix = page.get_pixmap(matrix=mat)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    return img
 
 
-# ─────────────────────────────────────────────
-# Extract HRV (Deterministic Text-Based)
-# ─────────────────────────────────────────────
+def extract_text_with_ocr(page):
+    img = render_page_to_image(page)
+    img_np = np.array(img)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    text = pytesseract.image_to_string(gray)
+    return text
+
+
+# ============================================================
+# HRV Extraction (Deterministic)
+# ============================================================
+
 def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -106,84 +47,42 @@ def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
         return {"rmssd_ms": None, "lf_hf_ratio": None}
 
     rmssd_value = None
-    lfhf_value = None
+    lf_hf_value = None
 
     for page in doc:
         text = page.get_text()
 
-        if "RMSSD" not in text and "LF" not in text:
-            continue
+        # OCR fallback if text layer empty
+        if not text.strip():
+            text = extract_text_with_ocr(page)
 
         lines = text.split("\n")
 
         for line in lines:
-            # Match RMSSD row
+            # Match RMSSD
             if re.search(r"\bRMSSD\b", line, re.IGNORECASE):
-                match = re.search(r"(\d+\.\d+|\d+)", line)
+                match = re.search(r"(\d+\.?\d*)", line)
                 if match:
                     rmssd_value = float(match.group(1))
 
-            # Match LF/HF row
-            if re.search(r"LF\s*/\s*HF", line, re.IGNORECASE) or \
-               re.search(r"Ratio of ANS activity", line, re.IGNORECASE):
-
-                match = re.search(r"(\d+\.\d+|\d+)", line)
+            # Match LF/HF
+            if re.search(r"\bLF[/\- ]?HF\b", line, re.IGNORECASE):
+                match = re.search(r"(\d+\.?\d*)", line)
                 if match:
-                    lfhf_value = float(match.group(1))
-
-        if rmssd_value is not None and lfhf_value is not None:
-            break
-
-    doc.close()
+                    lf_hf_value = float(match.group(1))
 
     return {
         "rmssd_ms": rmssd_value,
-        "lf_hf_ratio": lfhf_value,
+        "lf_hf_ratio": lf_hf_value
     }
 
 
-# ─────────────────────────────────────────────
-# Process PDF (Homeostasis Only)
-# ─────────────────────────────────────────────
-def process_pdf(pdf_bytes: bytes) -> dict:
-    if not pdf_bytes.startswith(b"%PDF"):
-        return {"success": False, "error": "Invalid PDF file"}
+# ============================================================
+# Debug Endpoint (TEMPORARY)
+# ============================================================
 
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception:
-        return {"success": False, "error": "Corrupted PDF"}
-
-    homeostasis_score = None
-    risk_color = "unknown"
-
-    if len(doc) > 0:
-        page = doc[0]
-        homeostasis_score = extract_homeostasis_score(page)
-        risk_color = detect_risk_color(page)
-
-    doc.close()
-
-    return {
-        "success": True,
-        "engine_version": "v6.0-deterministic-hrv",
-        "homeostasis": {
-            "homeostasis_score": homeostasis_score,
-            "risk_color": risk_color,
-        },
-    }
-
-
-# ─────────────────────────────────────────────
-# Flask Routes
-# ─────────────────────────────────────────────
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "version": "v6.0-deterministic-hrv"})
-
-
-@app.route("/preprocess", methods=["POST"])
-def preprocess():
+@app.route("/debug-text", methods=["POST"])
+def debug_text():
     if PREPROCESS_API_KEY:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
@@ -195,9 +94,30 @@ def preprocess():
     file = request.files["file"]
     pdf_bytes = file.read()
 
-    result = process_pdf(pdf_bytes)
-    return jsonify(result), 200
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return jsonify({"error": "Invalid PDF"}), 400
 
+    full_text = ""
+
+    for page in doc:
+        text = page.get_text()
+
+        if not text.strip():
+            text = extract_text_with_ocr(page)
+
+        full_text += "\n\n===== PAGE =====\n\n"
+        full_text += text
+
+    return jsonify({
+        "extracted_text": full_text
+    })
+
+
+# ============================================================
+# Extract HRV Endpoint
+# ============================================================
 
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
@@ -213,7 +133,43 @@ def extract_hrv():
     pdf_bytes = file.read()
 
     result = extract_hrv_metrics(pdf_bytes)
-    return jsonify(result), 200
+    return jsonify(result)
+
+
+# ============================================================
+# Preprocess Endpoint (Homeostasis placeholder)
+# ============================================================
+
+@app.route("/preprocess", methods=["POST"])
+def preprocess():
+    if PREPROCESS_API_KEY:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
+            return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    return jsonify({
+        "engine_version": "v6.0-deterministic-hrv",
+        "homeostasis": {
+            "homeostasis_score": None,
+            "risk_color": "unknown"
+        },
+        "success": True
+    })
+
+
+# ============================================================
+# Health Check
+# ============================================================
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "ok",
+        "version": "v6.0-deterministic-hrv"
+    })
 
 
 if __name__ == "__main__":
