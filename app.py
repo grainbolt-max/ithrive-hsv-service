@@ -6,17 +6,11 @@ API_KEY = "ithrive_secure_2026_key"
 app = Flask(__name__)
 
 
-# =========================
-# AUTH CHECK
-# =========================
 def is_authorized(req):
     auth = req.headers.get("Authorization", "")
     return auth == f"Bearer {API_KEY}"
 
 
-# =========================
-# SAFE FLOAT CLEANER
-# =========================
 def clean_number(value):
     if not value:
         return None
@@ -27,9 +21,6 @@ def clean_number(value):
         return None
 
 
-# =========================
-# HRV PARSER
-# =========================
 def parse_hrv(text):
 
     text = text.replace(",", ".")
@@ -47,9 +38,6 @@ def parse_hrv(text):
     }
 
 
-# =========================
-# MAIN EXTRACTION ENDPOINT
-# =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
 
@@ -73,9 +61,6 @@ def extract_hrv():
 
         parsed = parse_hrv(combined_text)
 
-        if not parsed["k30_15_ratio"]:
-            return jsonify({"error": "hrv_not_detected"}), 422
-
         return jsonify(parsed)
 
     except Exception as e:
@@ -85,9 +70,27 @@ def extract_hrv():
         }), 500
 
 
-# =========================
-# HEALTH CHECK
-# =========================
+# 🔎 DEBUG ROUTE
+@app.route("/debug-text", methods=["POST"])
+def debug_text():
+
+    if not is_authorized(request):
+        return jsonify({"error": "unauthorized"}), 401
+
+    file = request.files["file"]
+    pdf_bytes = file.read()
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    combined_text = ""
+
+    for page in doc:
+        combined_text += page.get_text()
+
+    doc.close()
+
+    return jsonify({"text": combined_text})
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "text_only_hrv_service_running"})
