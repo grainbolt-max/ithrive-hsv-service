@@ -43,18 +43,14 @@ def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
 # ─────────────────────────────────────────────
 def extract_homeostasis_score(page) -> int | None:
     text = page.get_text()
-
-    # Look for "Homeostasis Score" followed by a number
     match = re.search(r"Homeostasis\s*Score\s*(\d+)", text, re.IGNORECASE)
-
     if match:
         return int(match.group(1))
-
     return None
 
 
 # ─────────────────────────────────────────────
-# Detect Risk Color (still pixel-based)
+# Detect Risk Color (pixel-based)
 # ─────────────────────────────────────────────
 def detect_risk_color(page) -> str:
     zoom = TARGET_DPI / 72.0
@@ -67,7 +63,6 @@ def detect_risk_color(page) -> str:
 
     page_height, page_width, _ = img_array.shape
 
-    # Center box crop (where background color is)
     y0 = int(page_height * 0.48)
     y1 = int(page_height * 0.60)
     x0 = int(page_width * 0.40)
@@ -102,7 +97,53 @@ def detect_risk_color(page) -> str:
 
 
 # ─────────────────────────────────────────────
-# Process PDF
+# Extract HRV (Deterministic Text-Based)
+# ─────────────────────────────────────────────
+def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return {"rmssd_ms": None, "lf_hf_ratio": None}
+
+    rmssd_value = None
+    lfhf_value = None
+
+    for page in doc:
+        text = page.get_text()
+
+        if "RMSSD" not in text and "LF" not in text:
+            continue
+
+        lines = text.split("\n")
+
+        for line in lines:
+            # Match RMSSD row
+            if re.search(r"\bRMSSD\b", line, re.IGNORECASE):
+                match = re.search(r"(\d+\.\d+|\d+)", line)
+                if match:
+                    rmssd_value = float(match.group(1))
+
+            # Match LF/HF row
+            if re.search(r"LF\s*/\s*HF", line, re.IGNORECASE) or \
+               re.search(r"Ratio of ANS activity", line, re.IGNORECASE):
+
+                match = re.search(r"(\d+\.\d+|\d+)", line)
+                if match:
+                    lfhf_value = float(match.group(1))
+
+        if rmssd_value is not None and lfhf_value is not None:
+            break
+
+    doc.close()
+
+    return {
+        "rmssd_ms": rmssd_value,
+        "lf_hf_ratio": lfhf_value,
+    }
+
+
+# ─────────────────────────────────────────────
+# Process PDF (Homeostasis Only)
 # ─────────────────────────────────────────────
 def process_pdf(pdf_bytes: bytes) -> dict:
     if not pdf_bytes.startswith(b"%PDF"):
@@ -125,7 +166,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 
     return {
         "success": True,
-        "engine_version": "v5.0-text-extraction",
+        "engine_version": "v6.0-deterministic-hrv",
         "homeostasis": {
             "homeostasis_score": homeostasis_score,
             "risk_color": risk_color,
@@ -138,7 +179,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 # ─────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v5.0-text-extraction"})
+    return jsonify({"status": "ok", "version": "v6.0-deterministic-hrv"})
 
 
 @app.route("/preprocess", methods=["POST"])
@@ -155,6 +196,23 @@ def preprocess():
     pdf_bytes = file.read()
 
     result = process_pdf(pdf_bytes)
+    return jsonify(result), 200
+
+
+@app.route("/extract-hrv", methods=["POST"])
+def extract_hrv():
+    if PREPROCESS_API_KEY:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
+            return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    pdf_bytes = file.read()
+
+    result = extract_hrv_metrics(pdf_bytes)
     return jsonify(result), 200
 
 
