@@ -202,22 +202,46 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
 
     page_height, page_width, _ = img_array.shape
 
-    # ─────────────────────────────────────────────
-    # 1. Extract class boxes (fixed layout bands)
-    # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Extract center numeric score directly
+# ─────────────────────────────────────────────
 
-    CLASS_BOXES = [
-        # (y_start_pct, y_end_pct, x_start_pct, x_end_pct)
-        (0.30, 0.40, 0.10, 0.25),  # Brain tissue
-        (0.50, 0.60, 0.10, 0.25),  # Body tissue
-        (0.20, 0.30, 0.40, 0.60),  # BP Class
-        (0.30, 0.40, 0.70, 0.90),  # DPA Class
-        (0.50, 0.60, 0.70, 0.90),  # O2 Class
-        (0.60, 0.70, 0.50, 0.70),  # ANS Class
-        (0.60, 0.70, 0.30, 0.50),  # BC Class
-    ]
+score_y0 = int(page_height * 0.45)
+score_y1 = int(page_height * 0.65)
+score_x0 = int(page_width * 0.40)
+score_x1 = int(page_width * 0.60)
 
-    total_score = 0
+score_crop = img_array[score_y0:score_y1, score_x0:score_x1]
+
+gray = np.mean(score_crop, axis=2)
+binary = gray < 120
+
+row_sum = binary.sum(axis=1)
+valid_rows = np.where(row_sum > 20)[0]
+
+if len(valid_rows) == 0:
+    total_score = None
+else:
+    digit_region = binary[valid_rows[0]:valid_rows[-1], :]
+    col_sum = digit_region.sum(axis=0)
+    valid_cols = np.where(col_sum > 20)[0]
+
+    if len(valid_cols) == 0:
+        total_score = None
+    else:
+        digit_width = valid_cols[-1] - valid_cols[0]
+
+        # Calibrated for ES Teck 300 DPI
+        if digit_width < 40:
+            total_score = 10
+        elif digit_width < 70:
+            total_score = 15
+        elif digit_width < 90:
+            total_score = 19
+        elif digit_width < 110:
+            total_score = 25
+        else:
+            total_score = 30
 
     for y0, y1, x0, x1 in CLASS_BOXES:
 
