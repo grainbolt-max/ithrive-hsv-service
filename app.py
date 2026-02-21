@@ -1,8 +1,8 @@
 import re
-import io
-import fitz  # PyMuPDF
+import fitz
 import pytesseract
-from PIL import Image
+import tempfile
+import os
 from flask import Flask, request, jsonify
 
 API_KEY = "ithrive_secure_2026_key"
@@ -62,10 +62,8 @@ def extract_hrv():
 
         hrv_values = None
 
-        # Process pages one at a time
         for page in doc:
 
-            # First check text layer for keyword to avoid OCRing every page
             text_layer = page.get_text().lower()
 
             if "hrv" not in text_layer:
@@ -74,24 +72,26 @@ def extract_hrv():
             # Low DPI for memory safety
             pix = page.get_pixmap(dpi=100)
 
-            # Convert pixmap to PIL Image properly
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            # Write temporary image file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                pix.save(tmp.name)
+                tmp_path = tmp.name
 
-            # OCR
-            ocr_text = pytesseract.image_to_string(img)
+            # OCR from file path (more stable than in-memory)
+            ocr_text = pytesseract.image_to_string(tmp_path)
+
+            # Clean up temp file
+            os.remove(tmp_path)
 
             hrv_values = extract_hrv_from_text(ocr_text)
 
-            # If both RMSSD and LF/HF found, stop processing
             if hrv_values:
                 break
 
         doc.close()
 
         if not hrv_values:
-            return jsonify({
-                "error": "hrv_not_detected"
-            }), 422
+            return jsonify({"error": "hrv_not_detected"}), 422
 
         return jsonify(hrv_values)
 
