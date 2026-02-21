@@ -1,43 +1,15 @@
 import os
 import re
-import io
 import fitz  # PyMuPDF
-import pytesseract
-from PIL import Image
-import numpy as np
-import cv2
-
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY")
 
-TARGET_DPI = 150
-
 
 # ============================================================
-# Utilities
-# ============================================================
-
-def render_page_to_image(page):
-    zoom = TARGET_DPI / 72.0
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat)
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    return img
-
-
-def extract_text_with_ocr(page):
-    img = render_page_to_image(page)
-    img_np = np.array(img)
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    text = pytesseract.image_to_string(gray)
-    return text
-
-
-# ============================================================
-# HRV Extraction (Deterministic)
+# HRV Extraction (TEXT LAYER ONLY — NO OCR)
 # ============================================================
 
 def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
@@ -52,13 +24,13 @@ def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
     for page in doc:
         text = page.get_text()
 
-        # OCR fallback if text layer empty
-        if not text.strip():
-            text = extract_text_with_ocr(page)
+        if not text:
+            continue
 
         lines = text.split("\n")
 
         for line in lines:
+
             # Match RMSSD
             if re.search(r"\bRMSSD\b", line, re.IGNORECASE):
                 match = re.search(r"(\d+\.?\d*)", line)
@@ -78,7 +50,7 @@ def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
 
 
 # ============================================================
-# Debug Endpoint (TEMPORARY)
+# DEBUG TEXT ENDPOINT (SAFE — NO OCR)
 # ============================================================
 
 @app.route("/debug-text", methods=["POST"])
@@ -103,10 +75,6 @@ def debug_text():
 
     for page in doc:
         text = page.get_text()
-
-        if not text.strip():
-            text = extract_text_with_ocr(page)
-
         full_text += "\n\n===== PAGE =====\n\n"
         full_text += text
 
@@ -137,7 +105,7 @@ def extract_hrv():
 
 
 # ============================================================
-# Preprocess Endpoint (Homeostasis placeholder)
+# Preprocess Endpoint (Placeholder)
 # ============================================================
 
 @app.route("/preprocess", methods=["POST"])
@@ -151,7 +119,7 @@ def preprocess():
         return jsonify({"error": "No file uploaded"}), 400
 
     return jsonify({
-        "engine_version": "v6.0-deterministic-hrv",
+        "engine_version": "v6.1-text-layer-only",
         "homeostasis": {
             "homeostasis_score": None,
             "risk_color": "unknown"
@@ -168,7 +136,7 @@ def preprocess():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "v6.0-deterministic-hrv"
+        "version": "v6.1-text-layer-only"
     })
 
 
