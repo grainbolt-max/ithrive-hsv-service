@@ -1,7 +1,5 @@
 import os
-from typing import Any
-
-import fitz  # PyMuPDF
+import fitz
 import numpy as np
 from flask import Flask, jsonify, request
 
@@ -9,9 +7,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
 PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY", "")
-
 TARGET_DPI = 300
-HORIZONTAL_PAD_PCT = 0.05
 
 
 # ─────────────────────────────────────────────
@@ -47,52 +43,55 @@ def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
 def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
     page_height, page_width, _ = img_array.shape
 
-    score_y0 = int(page_height * 0.46)
-    score_y1 = int(page_height * 0.64)
-    score_x0 = int(page_width * 0.42)
-    score_x1 = int(page_width * 0.58)
+    # Tight crop around numeric score
+    score_y0 = int(page_height * 0.50)
+    score_y1 = int(page_height * 0.62)
+    score_x0 = int(page_width * 0.45)
+    score_x1 = int(page_width * 0.55)
 
     score_crop = img_array[score_y0:score_y1, score_x0:score_x1]
 
     gray = np.mean(score_crop, axis=2)
-    binary = gray < 120
+    binary = gray < 130
 
     row_sum = binary.sum(axis=1)
-    valid_rows = np.where(row_sum > 25)[0]
+    valid_rows = np.where(row_sum > 30)[0]
 
     total_score = None
 
     if len(valid_rows) > 0:
         digit_region = binary[valid_rows[0]:valid_rows[-1], :]
         col_sum = digit_region.sum(axis=0)
-        valid_cols = np.where(col_sum > 25)[0]
+        valid_cols = np.where(col_sum > 30)[0]
 
         if len(valid_cols) > 0:
             digit_width = valid_cols[-1] - valid_cols[0]
 
-            # Deterministic mapping for ES Teck 300 DPI
-            if digit_width < 70:
+            # Calibrated for ES Teck 300 DPI center number
+            if digit_width < 60:
                 total_score = 10
-            elif digit_width < 95:
+            elif digit_width < 85:
                 total_score = 19
-            elif digit_width < 120:
+            elif digit_width < 110:
                 total_score = 25
             else:
                 total_score = 30
 
-    # Detect risk color
-    y_start = int(page_height * 0.42)
-    y_end = int(page_height * 0.58)
-    x_start = int(page_width * 0.42)
-    x_end = int(page_width * 0.58)
+    # ─────────────────────────────────────────────
+    # Risk Color Detection (Yellow Background)
+    # ─────────────────────────────────────────────
+    y_start = int(page_height * 0.48)
+    y_end = int(page_height * 0.60)
+    x_start = int(page_width * 0.40)
+    x_end = int(page_width * 0.60)
 
     center_crop = img_array[y_start:y_end, x_start:x_end]
-    hsv = rgb_to_hsv(center_crop)
 
+    hsv = rgb_to_hsv(center_crop)
     H = hsv[:, :, 0]
     S = hsv[:, :, 1]
 
-    mask = S > 0.20
+    mask = S > 0.15
     valid_hues = H[mask]
 
     risk_color = "unknown"
@@ -148,7 +147,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 
     return {
         "success": True,
-        "engine_version": "v4.0-center-score",
+        "engine_version": "v4.1-center-score-calibrated",
         "homeostasis": homeostasis,
         "results": {},
         "errors": None,
@@ -160,7 +159,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 # ─────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v4.0-center-score"})
+    return jsonify({"status": "ok", "version": "v4.1-center-score-calibrated"})
 
 
 @app.route("/preprocess", methods=["POST"])
