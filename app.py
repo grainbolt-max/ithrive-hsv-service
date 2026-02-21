@@ -27,8 +27,8 @@ def extract_value_after_label(text, label):
     return clean_number(match.group(1)) if match else None
 
 
-@app.route("/extract-hrv", methods=["POST"])
-def extract_hrv():
+@app.route("/v1/extract-report", methods=["POST"])
+def extract_report():
 
     if not is_authorized(request):
         return jsonify({"error": "unauthorized"}), 401
@@ -41,32 +41,112 @@ def extract_hrv():
         pdf_bytes = file.read()
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        combined_text = ""
+        text = ""
 
         for page in doc:
-            combined_text += page.get_text()
+            text += page.get_text()
 
         doc.close()
 
-        # HRV values present in YOUR report format
-        k30_15 = extract_value_after_label(combined_text, "K30/15")
-        valsalva = extract_value_after_label(combined_text, "Valsalva ratio")
+        # -----------------------------
+        # PATIENT
+        # -----------------------------
 
-        # Blood pressure
-        bp_match = re.search(r"Systolic\s*/\s*Diastolic pressure:\s*(\d+)\s*/\s*(\d+)", combined_text)
+        name_match = re.search(r"First/Last Name:\s*(.+)", text)
+        name = name_match.group(1).strip() if name_match else None
+
+        first_name = None
+        last_name = None
+        if name:
+            parts = name.split(" ")
+            first_name = parts[0]
+            last_name = " ".join(parts[1:]) if len(parts) > 1 else None
+
+        dob_match = re.search(r"Date of birth:\s*(.+)", text)
+        dob = dob_match.group(1).strip() if dob_match else None
+
+        gender_match = re.search(r"\n(Female|Male)\n", text)
+        gender = gender_match.group(1) if gender_match else None
+
+        exam_match = re.search(r"Examination performed at:\s*(.+)", text)
+        exam_date = exam_match.group(1).strip() if exam_match else None
+
+        # -----------------------------
+        # VITALS
+        # -----------------------------
+
+        bp_match = re.search(
+            r"Systolic\s*/\s*Diastolic pressure:\s*(\d+)\s*/\s*(\d+)",
+            text
+        )
+
         systolic = clean_number(bp_match.group(1)) if bp_match else None
         diastolic = clean_number(bp_match.group(2)) if bp_match else None
 
-        # Daily Energy Expenditure
-        dee_match = re.search(r"Daily Energy Expenditure \(DEE\):\s*(\d+)", combined_text)
+        # -----------------------------
+        # HRV
+        # -----------------------------
+
+        k30_15 = extract_value_after_label(text, "K30/15")
+        valsalva = extract_value_after_label(text, "Valsalva ratio")
+
+        # -----------------------------
+        # METABOLIC
+        # -----------------------------
+
+        dee_match = re.search(
+            r"Daily Energy Expenditure \(DEE\):\s*(\d+)",
+            text
+        )
         dee = clean_number(dee_match.group(1)) if dee_match else None
 
+        # -----------------------------
+        # BODY
+        # -----------------------------
+
+        weight_match = re.search(r"Weight\s*:\s*(\d+\.?\d*)", text)
+        weight = clean_number(weight_match.group(1)) if weight_match else None
+
+        height_match = re.search(r"Height:\s*(\d+)\s*Feet\s*(\d+)", text)
+        height_feet = clean_number(height_match.group(1)) if height_match else None
+        height_inches = clean_number(height_match.group(2)) if height_match else None
+
+        # STRICT FAIL CONDITION
+        core_all_null = (
+            k30_15 is None and
+            valsalva is None and
+            systolic is None and
+            diastolic is None and
+            dee is None
+        )
+
+        if core_all_null:
+            return jsonify({"error": "report_format_not_supported"}), 422
+
         result = {
-            "k30_15_ratio": k30_15,
-            "valsava_ratio": valsalva,
-            "systolic_bp": systolic,
-            "diastolic_bp": diastolic,
-            "daily_energy_expenditure_kcal": dee
+            "patient": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "dob": dob,
+                "gender": gender,
+                "exam_date": exam_date
+            },
+            "vitals": {
+                "systolic_bp": systolic,
+                "diastolic_bp": diastolic
+            },
+            "hrv": {
+                "k30_15_ratio": k30_15,
+                "valsava_ratio": valsalva
+            },
+            "metabolic": {
+                "daily_energy_expenditure_kcal": dee
+            },
+            "body": {
+                "weight_lbs": weight,
+                "height_feet": height_feet,
+                "height_inches": height_inches
+            }
         }
 
         return jsonify(result)
@@ -80,7 +160,7 @@ def extract_hrv():
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "stable_text_extraction_service_running"})
+    return jsonify({"status": "v1_extract_report_service_running"})
 
 
 if __name__ == "__main__":
