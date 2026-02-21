@@ -34,13 +34,12 @@ def clean_number(val):
 
 
 # =========================
-# STRONG HRV PARSER
+# HRV PARSER
 # =========================
 def extract_hrv_from_text(text):
     text = text.replace(",", ".")
     text_lower = text.lower()
 
-    # Detect this page is HRV based on OCR content
     if "heart rate variability" not in text_lower and "lf/hf" not in text_lower:
         return None
 
@@ -63,25 +62,29 @@ def extract_hrv_from_text(text):
 
 
 # =========================
-# LOW MEMORY OCR
+# ULTRA LOW MEMORY OCR
 # =========================
 def ocr_page_low_memory(page):
-    # Low scale to stay within Render free RAM
-    mat = fitz.Matrix(0.7, 0.7)
+    # Even lower scale to prevent OOM
+    mat = fitz.Matrix(0.5, 0.5)
     pix = page.get_pixmap(matrix=mat, alpha=False)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         pix.save(tmp.name)
         path = tmp.name
 
-    text = pytesseract.image_to_string(path)
+    # Low-memory Tesseract config
+    text = pytesseract.image_to_string(
+        path,
+        config="--psm 6 --oem 1"
+    )
 
     os.remove(path)
     return text
 
 
 # =========================
-# EXTRACT ENDPOINT
+# ENDPOINT
 # =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
@@ -115,12 +118,9 @@ def extract_hrv():
         }), 500
 
 
-# =========================
-# HEALTH
-# =========================
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "smart_hrv_ocr_running"})
+    return jsonify({"status": "ultra_low_memory_hrv_running"})
 
 
 if __name__ == "__main__":
