@@ -5,9 +5,6 @@ import pytesseract
 import tempfile
 from flask import Flask, request, jsonify
 
-# =========================
-# CONFIG
-# =========================
 API_KEY = "ithrive_secure_2026_key"
 
 app = Flask(__name__)
@@ -24,16 +21,31 @@ def is_authorized(req):
 
 
 # =========================
-# SAFE HRV PARSER
+# CLEAN NUMBER
+# =========================
+def clean_number(val):
+    if not val:
+        return None
+    val = val.replace(",", ".")
+    try:
+        return float(val)
+    except:
+        return None
+
+
+# =========================
+# STRONG OCR PARSER
 # =========================
 def extract_hrv_from_text(text):
-    rmssd_match = re.search(r"RMSSD\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
-    lf_hf_match = re.search(r"LF\s*/\s*HF.*?(\d+\.?\d*)", text, re.IGNORECASE)
-    total_power_match = re.search(r"Total\s*power\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+    text = text.replace(",", ".")
+    
+    rmssd_match = re.search(r"R\s*M\s*S\s*S\s*D.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
+    lf_hf_match = re.search(r"L\s*F\s*[/\s]\s*H\s*F.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
+    total_power_match = re.search(r"Total\s*Power.*?(\d+\.\d+|\d+)", text, re.IGNORECASE)
 
-    rmssd = float(rmssd_match.group(1)) if rmssd_match else None
-    lf_hf = float(lf_hf_match.group(1)) if lf_hf_match else None
-    total_power = float(total_power_match.group(1)) if total_power_match else None
+    rmssd = clean_number(rmssd_match.group(1)) if rmssd_match else None
+    lf_hf = clean_number(lf_hf_match.group(1)) if lf_hf_match else None
+    total_power = clean_number(total_power_match.group(1)) if total_power_match else None
 
     if rmssd is None or lf_hf is None:
         return None
@@ -46,10 +58,9 @@ def extract_hrv_from_text(text):
 
 
 # =========================
-# FREE-TIER SAFE OCR
+# SAFE LOW MEMORY OCR
 # =========================
 def ocr_page_low_memory(page):
-    # Very low resolution matrix to prevent OOM
     mat = fitz.Matrix(0.6, 0.6)
     pix = page.get_pixmap(matrix=mat, alpha=False)
 
@@ -83,13 +94,10 @@ def extract_hrv():
         hrv_data = None
 
         for page in doc:
-
-            # Quick filter: skip pages without HRV text layer
             if "hrv" not in page.get_text().lower():
                 continue
 
             text = ocr_page_low_memory(page)
-
             hrv_data = extract_hrv_from_text(text)
 
             if hrv_data:
@@ -109,16 +117,10 @@ def extract_hrv():
         }), 500
 
 
-# =========================
-# HEALTH CHECK
-# =========================
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "minimal_hrv_service_running"})
 
 
-# =========================
-# START
-# =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
