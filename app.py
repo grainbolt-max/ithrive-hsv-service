@@ -1,143 +1,75 @@
-import os
 import re
+import os
 import fitz  # PyMuPDF
+import pytesseract
 from flask import Flask, request, jsonify
+
+API_KEY = "ithrive_secure_2026_key"
 
 app = Flask(__name__)
 
-PREPROCESS_API_KEY = os.environ.get("PREPROCESS_API_KEY")
+# ---- Authorization ----
+def check_auth():
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header.split(" ")[1]
+    return token == API_KEY
 
 
-# ============================================================
-# HRV Extraction (TEXT LAYER ONLY — NO OCR)
-# ============================================================
-
-def extract_hrv_metrics(pdf_bytes: bytes) -> dict:
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception:
-        return {"rmssd_ms": None, "lf_hf_ratio": None}
-
-    rmssd_value = None
-    lf_hf_value = None
-
-    for page in doc:
-        text = page.get_text()
-
-        if not text:
-            continue
-
-        lines = text.split("\n")
-
-        for line in lines:
-
-            # Match RMSSD
-            if re.search(r"\bRMSSD\b", line, re.IGNORECASE):
-                match = re.search(r"(\d+\.?\d*)", line)
-                if match:
-                    rmssd_value = float(match.group(1))
-
-            # Match LF/HF
-            if re.search(r"\bLF[/\- ]?HF\b", line, re.IGNORECASE):
-                match = re.search(r"(\d+\.?\d*)", line)
-                if match:
-                    lf_hf_value = float(match.group(1))
+# ---- Extract HRV from OCR Text ----
+def extract_hrv_values(text):
+    rmssd_match = re.search(r"RMSSD\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+    lf_hf_match = re.search(r"(LF\s*/\s*HF|Ratio of ANS activity).*?(\d+\.?\d*)", text, re.IGNORECASE)
+    total_power_match = re.search(r"Total power\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
 
     return {
-        "rmssd_ms": rmssd_value,
-        "lf_hf_ratio": lf_hf_value
+        "rmssd_ms": float(rmssd_match.group(1)) if rmssd_match else None,
+        "lf_hf_ratio": float(lf_hf_match.group(2)) if lf_hf_match else None,
+        "total_power_ms2": float(total_power_match.group(1)) if total_power_match else None
     }
 
 
-# ============================================================
-# DEBUG TEXT ENDPOINT (SAFE — NO OCR)
-# ============================================================
-
-@app.route("/debug-text", methods=["POST"])
-def debug_text():
-    if PREPROCESS_API_KEY:
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
-            return jsonify({"error": "Unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    file = request.files["file"]
-    pdf_bytes = file.read()
-
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception:
-        return jsonify({"error": "Invalid PDF"}), 400
-
-    full_text = ""
-
-    for page in doc:
-        text = page.get_text()
-        full_text += "\n\n===== PAGE =====\n\n"
-        full_text += text
-
-    return jsonify({
-        "extracted_text": full_text
-    })
-
-
-# ============================================================
-# Extract HRV Endpoint
-# ============================================================
-
+# ---- Main HRV Endpoint ----
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
-    if PREPROCESS_API_KEY:
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
-            return jsonify({"error": "Unauthorized"}), 401
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files["file"]
-    pdf_bytes = file.read()
 
-    result = extract_hrv_metrics(pdf_bytes)
-    return jsonify(result)
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
 
+        combined_text = ""
 
-# ============================================================
-# Preprocess Endpoint (Placeholder)
-# ============================================================
+        # Process one page at a time at LOW DPI
+        for page in doc:
+            pix = page.get_pixmap(dpi=120)  # Low DPI to reduce memory
+            text = pytesseract.image_to_string(pix.tobytes("png"))
+            combined_text += text + "\n"
 
-@app.route("/preprocess", methods=["POST"])
-def preprocess():
-    if PREPROCESS_API_KEY:
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[7:] != PREPROCESS_API_KEY:
-            return jsonify({"error": "Unauthorized"}), 401
+            # Early exit if we already found RMSSD
+            if "RMSSD" in combined_text:
+                break
 
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        doc.close()
 
-    return jsonify({
-        "engine_version": "v6.1-text-layer-only",
-        "homeostasis": {
-            "homeostasis_score": None,
-            "risk_color": "unknown"
-        },
-        "success": True
-    })
+        values = extract_hrv_values(combined_text)
+
+        return jsonify(values)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-# ============================================================
-# Health Check
-# ============================================================
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({
-        "status": "ok",
-        "version": "v6.1-text-layer-only"
-    })
+# ---- Health Check ----
+@app.route("/")
+def home():
+    return jsonify({"status": "HRV OCR extractor running"})
 
 
 if __name__ == "__main__":
