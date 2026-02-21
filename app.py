@@ -1,6 +1,5 @@
 import re
-import os
-import fitz  # PyMuPDF
+import fitz
 import pytesseract
 from flask import Flask, request, jsonify
 
@@ -8,68 +7,100 @@ API_KEY = "ithrive_secure_2026_key"
 
 app = Flask(__name__)
 
-# ---- Authorization ----
-def check_auth():
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+
+# -------------------------
+# Authorization
+# -------------------------
+def is_authorized(req):
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
         return False
-    token = auth_header.split(" ")[1]
+    token = auth.split(" ")[1]
     return token == API_KEY
 
 
-# ---- Extract HRV from OCR Text ----
-def extract_hrv_values(text):
+# -------------------------
+# Extract HRV values
+# -------------------------
+def extract_hrv_from_text(text):
     rmssd_match = re.search(r"RMSSD\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
-    lf_hf_match = re.search(r"(LF\s*/\s*HF|Ratio of ANS activity).*?(\d+\.?\d*)", text, re.IGNORECASE)
-    total_power_match = re.search(r"Total power\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+    lf_hf_match = re.search(r"LF\s*/\s*HF.*?(\d+\.?\d*)", text, re.IGNORECASE)
+    total_power_match = re.search(r"Total\s*power\s*[:\-]?\s*(\d+\.?\d*)", text, re.IGNORECASE)
+
+    rmssd = float(rmssd_match.group(1)) if rmssd_match else None
+    lf_hf = float(lf_hf_match.group(1)) if lf_hf_match else None
+    total_power = float(total_power_match.group(1)) if total_power_match else None
+
+    if rmssd is None or lf_hf is None:
+        return None
 
     return {
-        "rmssd_ms": float(rmssd_match.group(1)) if rmssd_match else None,
-        "lf_hf_ratio": float(lf_hf_match.group(2)) if lf_hf_match else None,
-        "total_power_ms2": float(total_power_match.group(1)) if total_power_match else None
+        "rmssd_ms": rmssd,
+        "lf_hf_ratio": lf_hf,
+        "total_power_ms2": total_power
     }
 
 
-# ---- Main HRV Endpoint ----
+# -------------------------
+# HRV Endpoint
+# -------------------------
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
-    if not check_auth():
-        return jsonify({"error": "Unauthorized"}), 401
+    if not is_authorized(request):
+        return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    file = request.files["file"]
+        return jsonify({"error": "file_missing"}), 400
 
     try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
+        file = request.files["file"]
+        pdf_bytes = file.read()
 
-        combined_text = ""
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        # Process one page at a time at LOW DPI
+        hrv_values = None
+
+        # Process one page at a time
         for page in doc:
-            pix = page.get_pixmap(dpi=120)  # Low DPI to reduce memory
-            text = pytesseract.image_to_string(pix.tobytes("png"))
-            combined_text += text + "\n"
 
-            # Early exit if we already found RMSSD
-            if "RMSSD" in combined_text:
+            # Only OCR pages likely containing HRV
+            text_layer = page.get_text().lower()
+
+            if "hrv" not in text_layer:
+                continue
+
+            # Low DPI to protect memory
+            pix = page.get_pixmap(dpi=100)
+
+            ocr_text = pytesseract.image_to_string(pix.tobytes("png"))
+
+            hrv_values = extract_hrv_from_text(ocr_text)
+
+            if hrv_values:
                 break
 
         doc.close()
 
-        values = extract_hrv_values(combined_text)
+        if not hrv_values:
+            return jsonify({
+                "error": "hrv_not_detected"
+            }), 422
 
-        return jsonify(values)
+        return jsonify(hrv_values)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": "processing_failed",
+            "details": str(e)
+        }), 500
 
 
-# ---- Health Check ----
+# -------------------------
+# Health Check
+# -------------------------
 @app.route("/")
-def home():
-    return jsonify({"status": "HRV OCR extractor running"})
+def health():
+    return jsonify({"status": "hrv_ocr_service_running"})
 
 
 if __name__ == "__main__":
