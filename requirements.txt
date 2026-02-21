@@ -4,4 +4,4 @@ pymupdf==1.25.3
 numpy==1.26.4
 opencv-python-headless==4.9.0.80
 paddleocr==2.7.0.3
-paddlepaddle==2.5.2
+paddlepaddle==2.6.2
