@@ -65,7 +65,7 @@ def extract_report():
         dob_match = re.search(r"Date of birth:\s*(.+)", text)
         dob = dob_match.group(1).strip() if dob_match else None
 
-        gender_match = re.search(r"\n(Female|Male)\n", text)
+        gender_match = re.search(r"Gender:\s*(Male|Female)", text, re.IGNORECASE)
         gender = gender_match.group(1) if gender_match else None
 
         exam_match = re.search(r"Examination performed at:\s*(.+)", text)
@@ -111,7 +111,10 @@ def extract_report():
         height_feet = clean_number(height_match.group(1)) if height_match else None
         height_inches = clean_number(height_match.group(2)) if height_match else None
 
+        # -----------------------------
         # STRICT FAIL CONDITION
+        # -----------------------------
+
         core_all_null = (
             k30_15 is None and
             valsalva is None and
