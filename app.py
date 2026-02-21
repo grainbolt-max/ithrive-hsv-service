@@ -21,21 +21,10 @@ def clean_number(value):
         return None
 
 
-def parse_hrv(text):
-
-    text = text.replace(",", ".")
-
-    def find_after(label):
-        pattern = rf"{label}[\s\S]*?Value:\s*(\d+\.?\d*)"
-        match = re.search(pattern, text, re.IGNORECASE)
-        return clean_number(match.group(1)) if match else None
-
-    return {
-        "k30_15_ratio": find_after("K30/15"),
-        "valsava_ratio": find_after("Valsalva ratio"),
-        "lf_hf_ratio": find_after("LF/HF"),
-        "total_power": find_after("Total Power"),
-    }
+def extract_value_after_label(text, label):
+    pattern = rf"{label}[\s\S]*?Value:\s*(\d+\.?\d*)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    return clean_number(match.group(1)) if match else None
 
 
 @app.route("/extract-hrv", methods=["POST"])
@@ -59,9 +48,28 @@ def extract_hrv():
 
         doc.close()
 
-        parsed = parse_hrv(combined_text)
+        # HRV values present in YOUR report format
+        k30_15 = extract_value_after_label(combined_text, "K30/15")
+        valsalva = extract_value_after_label(combined_text, "Valsalva ratio")
 
-        return jsonify(parsed)
+        # Blood pressure
+        bp_match = re.search(r"Systolic\s*/\s*Diastolic pressure:\s*(\d+)\s*/\s*(\d+)", combined_text)
+        systolic = clean_number(bp_match.group(1)) if bp_match else None
+        diastolic = clean_number(bp_match.group(2)) if bp_match else None
+
+        # Daily Energy Expenditure
+        dee_match = re.search(r"Daily Energy Expenditure \(DEE\):\s*(\d+)", combined_text)
+        dee = clean_number(dee_match.group(1)) if dee_match else None
+
+        result = {
+            "k30_15_ratio": k30_15,
+            "valsava_ratio": valsalva,
+            "systolic_bp": systolic,
+            "diastolic_bp": diastolic,
+            "daily_energy_expenditure_kcal": dee
+        }
+
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({
@@ -70,30 +78,9 @@ def extract_hrv():
         }), 500
 
 
-# 🔎 DEBUG ROUTE
-@app.route("/debug-text", methods=["POST"])
-def debug_text():
-
-    if not is_authorized(request):
-        return jsonify({"error": "unauthorized"}), 401
-
-    file = request.files["file"]
-    pdf_bytes = file.read()
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    combined_text = ""
-
-    for page in doc:
-        combined_text += page.get_text()
-
-    doc.close()
-
-    return jsonify({"text": combined_text})
-
-
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "text_only_hrv_service_running"})
+    return jsonify({"status": "stable_text_extraction_service_running"})
 
 
 if __name__ == "__main__":
