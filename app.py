@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 
 # =========================
-# AUTH
+# AUTH CHECK
 # =========================
 def is_authorized(req):
     auth = req.headers.get("Authorization", "")
@@ -15,7 +15,7 @@ def is_authorized(req):
 
 
 # =========================
-# CLEAN NUMBER
+# SAFE FLOAT CLEANER
 # =========================
 def clean_number(value):
     if not value:
@@ -28,26 +28,27 @@ def clean_number(value):
 
 
 # =========================
-# PARSE HRV FROM TEXT
+# HRV PARSER
 # =========================
 def parse_hrv(text):
 
     text = text.replace(",", ".")
 
-    def find(pattern):
+    def find_after(label):
+        pattern = rf"{label}[\s\S]*?Value:\s*(\d+\.?\d*)"
         match = re.search(pattern, text, re.IGNORECASE)
         return clean_number(match.group(1)) if match else None
 
     return {
-        "k30_15_ratio": find(r"K30/15.*?Value:\s*(\d+\.\d+|\d+)"),
-        "valsava_ratio": find(r"Valsalva ratio.*?Value:\s*(\d+\.\d+|\d+)"),
-        "lf_hf_ratio": find(r"LF/HF.*?(\d+\.\d+|\d+)"),
-        "total_power": find(r"Total Power.*?(\d+\.\d+|\d+)"),
+        "k30_15_ratio": find_after("K30/15"),
+        "valsava_ratio": find_after("Valsalva ratio"),
+        "lf_hf_ratio": find_after("LF/HF"),
+        "total_power": find_after("Total Power"),
     }
 
 
 # =========================
-# MAIN ENDPOINT
+# MAIN EXTRACTION ENDPOINT
 # =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
@@ -61,8 +62,8 @@ def extract_hrv():
     try:
         file = request.files["file"]
         pdf_bytes = file.read()
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         combined_text = ""
 
         for page in doc:
@@ -84,6 +85,9 @@ def extract_hrv():
         }), 500
 
 
+# =========================
+# HEALTH CHECK
+# =========================
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "text_only_hrv_service_running"})
