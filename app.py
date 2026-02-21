@@ -1,6 +1,8 @@
 import re
-import fitz
+import io
+import fitz  # PyMuPDF
 import pytesseract
+from PIL import Image
 from flask import Flask, request, jsonify
 
 API_KEY = "ithrive_secure_2026_key"
@@ -42,7 +44,7 @@ def extract_hrv_from_text(text):
 
 
 # -------------------------
-# HRV Endpoint
+# HRV Extraction Endpoint
 # -------------------------
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
@@ -60,22 +62,27 @@ def extract_hrv():
 
         hrv_values = None
 
-        # Process one page at a time
+        # Process pages one at a time
         for page in doc:
 
-            # Only OCR pages likely containing HRV
+            # First check text layer for keyword to avoid OCRing every page
             text_layer = page.get_text().lower()
 
             if "hrv" not in text_layer:
                 continue
 
-            # Low DPI to protect memory
+            # Low DPI for memory safety
             pix = page.get_pixmap(dpi=100)
 
-            ocr_text = pytesseract.image_to_string(pix.tobytes("png"))
+            # Convert pixmap to PIL Image properly
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+            # OCR
+            ocr_text = pytesseract.image_to_string(img)
 
             hrv_values = extract_hrv_from_text(ocr_text)
 
+            # If both RMSSD and LF/HF found, stop processing
             if hrv_values:
                 break
 
