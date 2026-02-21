@@ -1,22 +1,22 @@
 import re
 import fitz
-import pytesseract
-from PIL import Image
-import io
-import shutil
 from flask import Flask, request, jsonify
 
 API_KEY = "ithrive_secure_2026_key"
 app = Flask(__name__)
 
-# Ensure tesseract exists
-if not shutil.which("tesseract"):
-    raise RuntimeError("Tesseract not found in PATH")
 
+# =========================
+# AUTH
+# =========================
 def is_authorized(req):
     auth = req.headers.get("Authorization", "")
     return auth == f"Bearer {API_KEY}"
 
+
+# =========================
+# CLEAN NUMBER
+# =========================
 def clean_number(value):
     if not value:
         return None
@@ -26,14 +26,12 @@ def clean_number(value):
     except:
         return None
 
-def ocr_page(page):
-    mat = fitz.Matrix(2, 2)
-    pix = page.get_pixmap(matrix=mat)
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
-    text = pytesseract.image_to_string(img)
-    return text
 
+# =========================
+# PARSE HRV FROM TEXT
+# =========================
 def parse_hrv(text):
+
     text = text.replace(",", ".")
 
     def find(pattern):
@@ -41,16 +39,16 @@ def parse_hrv(text):
         return clean_number(match.group(1)) if match else None
 
     return {
-        "rmssd_ms": find(r"RMSSD.*?(\d+\.\d+|\d+)"),
-        "sdnn_ms": find(r"SDNN.*?(\d+\.\d+|\d+)"),
-        "hr_bpm": find(r"Heart\s*rate.*?(\d+\.\d+|\d+)"),
-        "lf_percent": find(r"Power\s*LF.*?(\d+\.\d+|\d+)"),
-        "hf_percent": find(r"Power\s*HF.*?(\d+\.\d+|\d+)"),
-        "vlf_percent": find(r"Power\s*VLF.*?(\d+\.\d+|\d+)"),
-        "lf_hf_ratio": find(r"LF\s*/\s*HF.*?(\d+\.\d+|\d+)"),
-        "total_power_ms2": find(r"Total\s*Power.*?(\d+\.\d+|\d+)")
+        "k30_15_ratio": find(r"K30/15.*?Value:\s*(\d+\.\d+|\d+)"),
+        "valsava_ratio": find(r"Valsalva ratio.*?Value:\s*(\d+\.\d+|\d+)"),
+        "lf_hf_ratio": find(r"LF/HF.*?(\d+\.\d+|\d+)"),
+        "total_power": find(r"Total Power.*?(\d+\.\d+|\d+)"),
     }
 
+
+# =========================
+# MAIN ENDPOINT
+# =========================
 @app.route("/extract-hrv", methods=["POST"])
 def extract_hrv():
 
@@ -66,24 +64,30 @@ def extract_hrv():
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         combined_text = ""
+
         for page in doc:
-            combined_text += ocr_page(page)
+            combined_text += page.get_text()
 
         doc.close()
 
         parsed = parse_hrv(combined_text)
 
-        if not parsed["rmssd_ms"]:
+        if not parsed["k30_15_ratio"]:
             return jsonify({"error": "hrv_not_detected"}), 422
 
         return jsonify(parsed)
 
     except Exception as e:
-        return jsonify({"error": "processing_failed", "details": str(e)}), 500
+        return jsonify({
+            "error": "processing_failed",
+            "details": str(e)
+        }), 500
+
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ocr_hrv_service_running"})
+    return jsonify({"status": "text_only_hrv_service_running"})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
