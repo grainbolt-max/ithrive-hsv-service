@@ -1,4 +1,5 @@
 import os
+import re
 import fitz
 import numpy as np
 from flask import Flask, jsonify, request
@@ -11,7 +12,7 @@ TARGET_DPI = 300
 
 
 # ─────────────────────────────────────────────
-# RGB → HSV (deterministic)
+# RGB → HSV (for risk color only)
 # ─────────────────────────────────────────────
 def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
     rgb = image_array.astype(np.float64) / 255.0
@@ -38,84 +39,66 @@ def rgb_to_hsv(image_array: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
-# Extract Homeostasis Score (CENTER ONLY)
+# Extract Homeostasis Score via TEXT
 # ─────────────────────────────────────────────
-def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
+def extract_homeostasis_score(page) -> int | None:
+    text = page.get_text()
+
+    # Look for "Homeostasis Score" followed by a number
+    match = re.search(r"Homeostasis\s*Score\s*(\d+)", text, re.IGNORECASE)
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# Detect Risk Color (still pixel-based)
+# ─────────────────────────────────────────────
+def detect_risk_color(page) -> str:
+    zoom = TARGET_DPI / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+
+    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, 3
+    )
+
     page_height, page_width, _ = img_array.shape
 
-    # Tight crop around numeric score
-    score_y0 = int(page_height * 0.50)
-    score_y1 = int(page_height * 0.62)
-    score_x0 = int(page_width * 0.45)
-    score_x1 = int(page_width * 0.55)
+    # Center box crop (where background color is)
+    y0 = int(page_height * 0.48)
+    y1 = int(page_height * 0.60)
+    x0 = int(page_width * 0.40)
+    x1 = int(page_width * 0.60)
 
-    score_crop = img_array[score_y0:score_y1, score_x0:score_x1]
+    crop = img_array[y0:y1, x0:x1]
 
-    gray = np.mean(score_crop, axis=2)
-    binary = gray < 130
-
-    row_sum = binary.sum(axis=1)
-    valid_rows = np.where(row_sum > 30)[0]
-
-    total_score = None
-
-    if len(valid_rows) > 0:
-        digit_region = binary[valid_rows[0]:valid_rows[-1], :]
-        col_sum = digit_region.sum(axis=0)
-        valid_cols = np.where(col_sum > 30)[0]
-
-        if len(valid_cols) > 0:
-            digit_width = valid_cols[-1] - valid_cols[0]
-
-            # Calibrated for ES Teck 300 DPI center number
-            if digit_width < 60:
-                total_score = 10
-            elif digit_width < 85:
-                total_score = 19
-            elif digit_width < 110:
-                total_score = 25
-            else:
-                total_score = 30
-
-    # ─────────────────────────────────────────────
-    # Risk Color Detection (Yellow Background)
-    # ─────────────────────────────────────────────
-    y_start = int(page_height * 0.48)
-    y_end = int(page_height * 0.60)
-    x_start = int(page_width * 0.40)
-    x_end = int(page_width * 0.60)
-
-    center_crop = img_array[y_start:y_end, x_start:x_end]
-
-    hsv = rgb_to_hsv(center_crop)
+    hsv = rgb_to_hsv(crop)
     H = hsv[:, :, 0]
     S = hsv[:, :, 1]
 
     mask = S > 0.15
     valid_hues = H[mask]
 
-    risk_color = "unknown"
+    if valid_hues.size == 0:
+        return "unknown"
 
-    if valid_hues.size > 0:
-        mean_hue = float(np.mean(valid_hues))
+    mean_hue = float(np.mean(valid_hues))
 
-        if 85 <= mean_hue <= 160:
-            risk_color = "green"
-        elif 60 <= mean_hue < 85:
-            risk_color = "light_green"
-        elif 40 <= mean_hue < 60:
-            risk_color = "grey"
-        elif 20 <= mean_hue < 40:
-            risk_color = "yellow"
-        elif 10 <= mean_hue < 20:
-            risk_color = "orange"
-        else:
-            risk_color = "red"
-
-    return {
-        "homeostasis_score": total_score,
-        "risk_color": risk_color,
-    }
+    if 85 <= mean_hue <= 160:
+        return "green"
+    elif 60 <= mean_hue < 85:
+        return "light_green"
+    elif 40 <= mean_hue < 60:
+        return "grey"
+    elif 20 <= mean_hue < 40:
+        return "yellow"
+    elif 10 <= mean_hue < 20:
+        return "orange"
+    else:
+        return "red"
 
 
 # ─────────────────────────────────────────────
@@ -123,34 +106,30 @@ def compute_homeostasis_metrics(img_array: np.ndarray) -> dict:
 # ─────────────────────────────────────────────
 def process_pdf(pdf_bytes: bytes) -> dict:
     if not pdf_bytes.startswith(b"%PDF"):
-        return {"success": False, "error": "Invalid PDF file", "results": {}}
+        return {"success": False, "error": "Invalid PDF file"}
 
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception:
-        return {"success": False, "error": "Corrupted PDF", "results": {}}
+        return {"success": False, "error": "Corrupted PDF"}
 
-    homeostasis = None
+    homeostasis_score = None
+    risk_color = "unknown"
 
     if len(doc) > 0:
-        zoom = TARGET_DPI / 72.0
-        mat = fitz.Matrix(zoom, zoom)
-        pix = doc[0].get_pixmap(matrix=mat, alpha=False)
-
-        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-            pix.height, pix.width, 3
-        )
-
-        homeostasis = compute_homeostasis_metrics(img_array)
+        page = doc[0]
+        homeostasis_score = extract_homeostasis_score(page)
+        risk_color = detect_risk_color(page)
 
     doc.close()
 
     return {
         "success": True,
-        "engine_version": "v4.1-center-score-calibrated",
-        "homeostasis": homeostasis,
-        "results": {},
-        "errors": None,
+        "engine_version": "v5.0-text-extraction",
+        "homeostasis": {
+            "homeostasis_score": homeostasis_score,
+            "risk_color": risk_color,
+        },
     }
 
 
@@ -159,7 +138,7 @@ def process_pdf(pdf_bytes: bytes) -> dict:
 # ─────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v4.1-center-score-calibrated"})
+    return jsonify({"status": "ok", "version": "v5.0-text-extraction"})
 
 
 @app.route("/preprocess", methods=["POST"])
