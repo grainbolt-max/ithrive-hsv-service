@@ -69,18 +69,19 @@ def extract_hrv():
             if "hrv" not in text_layer:
                 continue
 
-            # Low DPI for memory safety
+            # Low DPI for free tier memory safety
             pix = page.get_pixmap(dpi=100)
 
-            # Write temporary image file
+            # Force RGB (fixes Unsupported image object error)
+            if pix.alpha or pix.colorspace.n != 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 pix.save(tmp.name)
                 tmp_path = tmp.name
 
-            # OCR from file path (more stable than in-memory)
             ocr_text = pytesseract.image_to_string(tmp_path)
 
-            # Clean up temp file
             os.remove(tmp_path)
 
             hrv_values = extract_hrv_from_text(ocr_text)
