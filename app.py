@@ -3,14 +3,13 @@ import re
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_bytes
+from PIL import Image
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
-
-# HARD LOCKED BODY PAGE (0-based index 6 = page 7)
-BODY_PAGE_INDEX = 6
+BODY_PAGE_INDEX = 6  # locked page
 
 
 def safe_float(val):
@@ -21,41 +20,64 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# OCR BODY PAGE (Deterministic + Stable)
+# IMAGE PREPROCESSING FOR STABLE OCR
 # ---------------------------------------------------
-def ocr_body_page(pdf_bytes):
+def preprocess_image(image: Image.Image) -> Image.Image:
+    # Convert to grayscale
+    gray = image.convert("L")
+
+    # Apply binary threshold
+    threshold = 180
+    binary = gray.point(lambda x: 255 if x > threshold else 0, mode="1")
+
+    return binary
+
+
+# ---------------------------------------------------
+# STABILIZED OCR EXTRACTION
+# ---------------------------------------------------
+def extract_body_ocr(pdf_bytes):
+    body = {}
+
     try:
+        # Convert only locked page at high DPI
         images = convert_from_bytes(
             pdf_bytes,
-            dpi=150,
+            dpi=300,
             first_page=BODY_PAGE_INDEX + 1,
             last_page=BODY_PAGE_INDEX + 1
         )
 
-        for image in images:
-            text = pytesseract.image_to_string(image)
-
-            body = {}
-
-            patterns = {
-                "weight_lb": r"Weight[^0-9]*([0-9]+\.?[0-9]*)",
-                "fat_free_mass_lb": r"Fat\s*Free\s*Mass[^0-9]*([0-9]+\.?[0-9]*)",
-                "fat_mass_lb": r"(Body\s*Fat\s*Mass|Fat\s*Mass)[^0-9]*([0-9]+\.?[0-9]*)",
-                "total_body_water_lb": r"Total\s*Body\s*Water[^0-9]*([0-9]+\.?[0-9]*)",
-                "body_fat_percent": r"(Percent\s*Body\s*Fat|Body\s*Fat)[^0-9]*([0-9]+\.?[0-9]*)"
-            }
-
-            for key, pattern in patterns.items():
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    body[key] = safe_float(match.groups()[-1])
-
+        if not images:
             return body
+
+        image = preprocess_image(images[0])
+
+        # Tesseract configuration for numeric extraction
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.%'
+
+        text = pytesseract.image_to_string(image, config=custom_config)
+
+        # Normalize text spacing
+        text = re.sub(r"\s+", " ", text)
+
+        patterns = {
+            "weight_lb": r"Weight[^0-9]*([0-9]+\.?[0-9]*)",
+            "fat_free_mass_lb": r"Fat Free Mass[^0-9]*([0-9]+\.?[0-9]*)",
+            "fat_mass_lb": r"Fat Mass[^0-9]*([0-9]+\.?[0-9]*)",
+            "total_body_water_lb": r"Total Body Water[^0-9]*([0-9]+\.?[0-9]*)",
+            "body_fat_percent": r"Body Fat[^0-9]*([0-9]+\.?[0-9]*)"
+        }
+
+        for key, pattern in patterns.items():
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                body[key] = safe_float(match.group(1))
 
     except Exception as e:
         print("OCR ERROR:", e)
 
-    return {}
+    return body
 
 
 # ---------------------------------------------------
@@ -69,7 +91,7 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    result["body_composition"] = ocr_body_page(pdf_bytes)
+    result["body_composition"] = extract_body_ocr(pdf_bytes)
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -106,7 +128,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "LOCKED_BODY_PAGE_VERSION_ACTIVE"})
+    return jsonify({"status": "STABILIZED_OCR_VERSION_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
