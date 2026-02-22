@@ -15,7 +15,6 @@ def require_auth(req):
     auth = req.headers.get("Authorization", "")
     return auth == f"Bearer {API_KEY}"
 
-
 # ------------------------------------------------------------
 # TEXT EXTRACTION
 # ------------------------------------------------------------
@@ -29,16 +28,16 @@ def extract_full_text(file_stream):
                 text += "\n" + page_text
     return text
 
-
 # ------------------------------------------------------------
-# BODY COMPOSITION DEBUG (PRINT RAW TABLE STRUCTURE)
+# BODY COMPOSITION DEBUG (CORRECT PAGE MATCH)
 # ------------------------------------------------------------
 
 def debug_body_composition(file_stream):
     with pdfplumber.open(file_stream) as pdf:
         for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
-            if text and "Body Composition Indicators" in text:
+
+            if text and "Body composition and follow up" in text:
 
                 print("\n==============================")
                 print("BODY COMPOSITION PAGE FOUND")
@@ -56,8 +55,7 @@ def debug_body_composition(file_stream):
                 print("\n==============================\n")
                 break
 
-    return {}
-
+    return None
 
 # ------------------------------------------------------------
 # HRV
@@ -72,7 +70,6 @@ def extract_hrv(text):
         "valsava_ratio": float(valsalva.group(1)) if valsalva else None
     }
 
-
 # ------------------------------------------------------------
 # VITALS
 # ------------------------------------------------------------
@@ -82,6 +79,7 @@ def extract_vitals(text):
         r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)",
         text
     )
+
     if match:
         return {
             "systolic_bp": float(match.group(1)),
@@ -93,7 +91,6 @@ def extract_vitals(text):
         "diastolic_bp": None
     }
 
-
 # ------------------------------------------------------------
 # METABOLIC
 # ------------------------------------------------------------
@@ -103,6 +100,7 @@ def extract_metabolic(text):
         r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)",
         text
     )
+
     if match:
         return {
             "daily_energy_expenditure_kcal": float(match.group(1))
@@ -112,17 +110,13 @@ def extract_metabolic(text):
         "daily_energy_expenditure_kcal": None
     }
 
-
 # ------------------------------------------------------------
 # ROUTES
 # ------------------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({
-        "status": "extract_report_service_running"
-    })
-
+    return jsonify({"status": "extract_report_service_running"})
 
 @app.route("/v1/extract-report", methods=["POST"])
 def extract_report():
@@ -138,10 +132,10 @@ def extract_report():
     # Extract text
     text = extract_full_text(file.stream)
 
-    # Reset stream for debug table parsing
+    # Reset stream
     file.stream.seek(0)
 
-    # DEBUG BODY COMPOSITION TABLE STRUCTURE
+    # DEBUG BODY PAGE
     debug_body_composition(file.stream)
 
     return jsonify({
@@ -150,7 +144,6 @@ def extract_report():
         "metabolic": extract_metabolic(text),
         "body_composition": None
     })
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
