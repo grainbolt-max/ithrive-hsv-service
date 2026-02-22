@@ -17,7 +17,7 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# AUTO-DETECT NUMERIC COLUMN
+# DIAGNOSTIC BODY EXTRACTION
 # ---------------------------------------------------
 def extract_body_vector(pdf_bytes):
     body = {}
@@ -26,49 +26,16 @@ def extract_body_vector(pdf_bytes):
         page = pdf.pages[BODY_PAGE_INDEX]
         words = page.extract_words()
 
-        # Get only numeric tokens
-        numeric_words = []
+        print("\n===== PAGE 6 WORD DUMP =====")
         for w in words:
-            if re.fullmatch(r"\d+\.\d+|\d+", w["text"]):
-                numeric_words.append({
-                    "value": safe_float(w["text"]),
-                    "x": w["x0"],
-                    "y": w["top"]
-                })
-
-        if not numeric_words:
-            return body
-
-        # Group by approximate X (column clustering)
-        numeric_words.sort(key=lambda w: w["x"])
-
-        columns = []
-        for word in numeric_words:
-            placed = False
-            for col in columns:
-                if abs(word["x"] - col[0]["x"]) < 20:  # 20px tolerance
-                    col.append(word)
-                    placed = True
-                    break
-            if not placed:
-                columns.append([word])
-
-        # Select rightmost column
-        right_column = max(columns, key=lambda col: col[0]["x"])
-
-        # Sort top to bottom
-        right_column.sort(key=lambda w: w["y"])
-
-        values = [w["value"] for w in right_column if w["value"] is not None]
-
-        # Expect order:
-        # Total Body Water
-        # Fat Free Mass
-        # Weight
-        if len(values) >= 3:
-            body["total_body_water_lb"] = values[0]
-            body["fat_free_mass_lb"] = values[1]
-            body["weight_lb"] = values[2]
+            print({
+                "text": w["text"],
+                "x0": w["x0"],
+                "x1": w["x1"],
+                "top": w["top"],
+                "bottom": w["bottom"]
+            })
+        print("===== END DUMP =====\n")
 
     return body
 
@@ -117,7 +84,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "COLUMN_AUTO_DETECT_ACTIVE"})
+    return jsonify({"status": "PAGE6_WORD_DIAGNOSTIC_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
