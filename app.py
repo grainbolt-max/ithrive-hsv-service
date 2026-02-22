@@ -18,7 +18,7 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# OCR BODY PAGE (Memory Safe)
+# OCR BODY PAGE (Memory Safe + Robust Parsing)
 # ---------------------------------------------------
 def ocr_body_page(pdf_bytes):
     try:
@@ -34,21 +34,19 @@ def ocr_body_page(pdf_bytes):
 
             body = {}
 
-            weight = re.search(r"Weight.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
-            fat_mass = re.search(r"Fat\s*Mass.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
-            ffm = re.search(r"Fat\s*Free\s*Mass.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
-            body_fat = re.search(r"(Percent\s*Body\s*Fat|Body\s*Fat).*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
+            patterns = {
+                "weight_lb": r"Weight[^0-9]*([0-9]+\.?[0-9]*)",
+                "fat_free_mass_lb": r"Fat\s*Free\s*Mass[^0-9]*([0-9]+\.?[0-9]*)",
+                "fat_mass_lb": r"(Body\s*Fat\s*Mass|Fat\s*Mass)[^0-9]*([0-9]+\.?[0-9]*)",
+                "total_body_water_lb": r"Total\s*Body\s*Water[^0-9]*([0-9]+\.?[0-9]*)",
+                "body_fat_percent": r"(Percent\s*Body\s*Fat|Body\s*Fat)[^0-9]*([0-9]+\.?[0-9]*)"
+            }
 
-            if weight:
-                body["weight_lb"] = safe_float(weight.group(1))
-            if fat_mass:
-                body["fat_mass_lb"] = safe_float(fat_mass.group(1))
-            if ffm:
-                body["fat_free_mass_lb"] = safe_float(ffm.group(1))
-            if body_fat:
-                # if 2 groups exist, last group is number
-                value = body_fat.groups()[-1]
-                body["body_fat_percent"] = safe_float(value)
+            for key, pattern in patterns.items():
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    value = match.groups()[-1]
+                    body[key] = safe_float(value)
 
             return body
 
@@ -69,7 +67,7 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    # OCR body
+    # OCR for body page
     result["body_composition"] = ocr_body_page(pdf_bytes)
 
     # Text-based extraction for other pages
@@ -89,8 +87,8 @@ def extract_report(pdf_bytes):
                 if v_match:
                     result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
 
-                # Energy
-                dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)", text)
+                # Daily Energy Expenditure
+                dee_match = re.search(r"Daily Energy Expenditure[^0-9]*([0-9]+)", text)
                 if dee_match:
                     result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
 
@@ -114,7 +112,7 @@ def extract_report(pdf_bytes):
 # ---------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "OCR_MEMORY_SAFE_VERSION_ACTIVE"})
+    return jsonify({"status": "FINAL_OCR_BODY_VERSION_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
