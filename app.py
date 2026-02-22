@@ -8,15 +8,17 @@ app = Flask(__name__)
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "ithrive_secure_2026_key")
 
 # ------------------------------------------------------------
-# Utilities
+# AUTH
 # ------------------------------------------------------------
 
 def require_auth(req):
     auth = req.headers.get("Authorization", "")
-    if auth != f"Bearer {API_KEY}":
-        return False
-    return True
+    return auth == f"Bearer {API_KEY}"
 
+
+# ------------------------------------------------------------
+# TEXT EXTRACTION
+# ------------------------------------------------------------
 
 def extract_full_text(file_stream):
     text = ""
@@ -28,83 +30,115 @@ def extract_full_text(file_stream):
     return text
 
 
-def find_number(pattern, text):
-    match = re.search(pattern, text, re.IGNORECASE)
-    if match:
+# ------------------------------------------------------------
+# TABLE EXTRACTION (DETERMINISTIC BODY COMPOSITION)
+# ------------------------------------------------------------
+
+def extract_body_composition_tables(file_stream):
+    results = {
+        "intra_cellular_water_lb": None,
+        "extra_cellular_water_lb": None,
+        "dry_lean_mass_lb": None,
+        "body_fat_mass_lb": None,
+        "total_body_water_lb": None,
+        "fat_free_mass_lb": None,
+        "weight_lb": None,
+        "fat_free_mass_percent": None,
+        "body_fat_percent": None,
+        "total_body_water_percent": None,
+        "intra_cellular_water_percent": None,
+        "extra_cellular_water_percent": None,
+        "bmi": None,
+        "basal_metabolic_rate_kcal": None
+    }
+
+    with pdfplumber.open(file_stream) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text and "Body Composition Indicators (lb)" in text:
+                tables = page.extract_tables()
+
+                for table in tables:
+                    for row in table:
+                        if not row:
+                            continue
+
+                        row_text = " ".join([str(cell) for cell in row if cell])
+
+                        # ----- LB VALUES -----
+                        if "Intra Cellular Water" in row_text:
+                            results["intra_cellular_water_lb"] = safe_float(row)
+                        if "Extra Cellular Water" in row_text:
+                            results["extra_cellular_water_lb"] = safe_float(row)
+                        if "Dry Lean Mass" in row_text:
+                            results["dry_lean_mass_lb"] = safe_float(row)
+                        if "Body Fat Mass" in row_text:
+                            results["body_fat_mass_lb"] = safe_float(row)
+                        if "Total Body Water" in row_text:
+                            results["total_body_water_lb"] = safe_float(row)
+                        if "Fat Free Mass" in row_text:
+                            results["fat_free_mass_lb"] = safe_float(row)
+                        if "Weight" in row_text and results["weight_lb"] is None:
+                            results["weight_lb"] = safe_float(row)
+
+                        # ----- PERCENT VALUES -----
+                        if "%" in row_text:
+                            if "Fat Free Mass" in row_text:
+                                results["fat_free_mass_percent"] = extract_percent(row_text)
+                            if "Body Fat Mass" in row_text:
+                                results["body_fat_percent"] = extract_percent(row_text)
+                            if "Total Body Water" in row_text:
+                                results["total_body_water_percent"] = extract_percent(row_text)
+                            if "Intra Cellular Water" in row_text:
+                                results["intra_cellular_water_percent"] = extract_percent(row_text)
+                            if "Extra Cellular Water" in row_text:
+                                results["extra_cellular_water_percent"] = extract_percent(row_text)
+
+                        if "Body Mass Index" in row_text:
+                            results["bmi"] = extract_number(row_text)
+
+                        if "Basal Metabolic Rate" in row_text:
+                            results["basal_metabolic_rate_kcal"] = extract_number(row_text)
+
+                break  # stop once page found
+
+    return results
+
+
+# ------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------
+
+def safe_float(row):
+    for cell in row:
         try:
-            return float(match.group(1))
+            return float(cell)
         except:
-            return None
+            continue
+    return None
+
+
+def extract_percent(text):
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def extract_number(text):
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
+    if match:
+        return float(match.group(1))
     return None
 
 
 # ------------------------------------------------------------
-# Deterministic Extractors
+# HRV + VITALS + METABOLIC (UNCHANGED)
 # ------------------------------------------------------------
 
-def extract_patient(text):
-    first_name = None
-    last_name = None
-    dob = None
-    gender = None
-    exam_date = None
-
-    name_match = re.search(r"First/Last Name:\s*([A-Za-z]+)\s+([A-Za-z]+)", text)
-    if name_match:
-        first_name = name_match.group(1)
-        last_name = name_match.group(2)
-
-    dob_match = re.search(r"Date of birth:\s*([0-9\-\/]+)", text)
-    if dob_match:
-        dob = dob_match.group(1)
-
-    gender_match = re.search(r"Gender:\s*(Male|Female)", text, re.IGNORECASE)
-    if gender_match:
-        gender = gender_match.group(1)
-
-    exam_match = re.search(r"Examination performed at:\s*([0-9\-\: ]+)", text)
-    if exam_match:
-        exam_date = exam_match.group(1).strip()
-
-    return {
-        "first_name": first_name,
-        "last_name": last_name,
-        "dob": dob,
-        "gender": gender,
-        "exam_date": exam_date
-    }
-
-
-def extract_body(text):
-    weight_lbs = find_number(r"Weight\s*:\s*([0-9\.]+)", text)
-    height_feet = find_number(r"Height:\s*([0-9]+)\s*Feet", text)
-    height_inches = find_number(r"Feet\s*([0-9]+)\s*Inch", text)
-
-    return {
-        "weight_lbs": weight_lbs,
-        "height_feet": height_feet,
-        "height_inches": height_inches
-    }
-
-
-def extract_vitals(text):
-    systolic = None
-    diastolic = None
-
-    bp_match = re.search(r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)", text)
-    if bp_match:
-        systolic = float(bp_match.group(1))
-        diastolic = float(bp_match.group(2))
-
-    return {
-        "systolic_bp": systolic,
-        "diastolic_bp": diastolic
-    }
-
-
 def extract_hrv(text):
-    k30 = find_number(r"K30\/15[\s\S]*?Value:\s*([0-9\.]+)", text)
-    valsalva = find_number(r"Valsalva ratio[\s\S]*?Value:\s*([0-9\.]+)", text)
+    k30 = extract_number_section(text, "K30/15")
+    valsalva = extract_number_section(text, "Valsalva ratio")
 
     return {
         "k30_15_ratio": k30,
@@ -112,78 +146,38 @@ def extract_hrv(text):
     }
 
 
+def extract_number_section(text, section_name):
+    pattern = rf"{section_name}[\s\S]*?Value:\s*([0-9\.]+)"
+    match = re.search(pattern, text)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+def extract_vitals(text):
+    match = re.search(r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)", text)
+    if match:
+        return {
+            "systolic_bp": float(match.group(1)),
+            "diastolic_bp": float(match.group(2))
+        }
+    return {"systolic_bp": None, "diastolic_bp": None}
+
+
 def extract_metabolic(text):
-    dee = find_number(r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)", text)
-    return {
-        "daily_energy_expenditure_kcal": dee
-    }
-
-
-def extract_body_composition(text):
-    return {
-        "body_fat_percent": find_number(r"Body Fat\s*%[:\s]*([0-9\.]+)", text),
-        "visceral_fat_rating": find_number(r"Visceral Fat Rating[:\s]*([0-9\.]+)", text),
-        "muscle_mass_percent": find_number(r"Muscle Mass\s*%[:\s]*([0-9\.]+)", text),
-        "skeletal_muscle_percent": find_number(r"Skeletal Muscle\s*%[:\s]*([0-9\.]+)", text),
-        "total_body_water_percent": find_number(r"Total Body Water\s*%[:\s]*([0-9\.]+)", text),
-        "intracellular_water_percent": find_number(r"Intra-Cellular Water\s*%[:\s]*([0-9\.]+)", text),
-        "extracellular_water_percent": find_number(r"Extra-Cellular Water\s*%[:\s]*([0-9\.]+)", text),
-        "metabolic_age": find_number(r"Metabolic Age[:\s]*([0-9\.]+)", text),
-    }
-
-
-DISEASE_FIELDS = [
-    "atherosclerosis",
-    "lv_hypertrophy",
-    "large_artery_stiffness",
-    "small_medium_artery_stiffness",
-    "peripheral_vessels",
-    "metabolic_syndrome",
-    "insulin_resistance",
-    "diabetes_screening",
-    "ldl_cholesterol",
-    "tissue_inflammatory_process",
-    "hypothyroidism",
-    "hyperthyroidism",
-    "hepatic_fibrosis",
-    "chronic_hepatitis",
-    "respiratory",
-    "kidney_function",
-    "digestive_disorders",
-    "major_depression"
-]
-
-
-def extract_disease(text):
-    results = {}
-    for field in DISEASE_FIELDS:
-        readable = field.replace("_", " ")
-        pattern = rf"{readable}[\s\S]*?([0-9]{{1,3}})\s*%"
-        val = find_number(pattern, text)
-        results[field] = val
-    return results
+    match = re.search(r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)", text)
+    if match:
+        return {"daily_energy_expenditure_kcal": float(match.group(1))}
+    return {"daily_energy_expenditure_kcal": None}
 
 
 # ------------------------------------------------------------
-# Routes
+# ROUTES
 # ------------------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "extract_report_service_running"})
-
-
-@app.route("/debug-text", methods=["POST"])
-def debug_text():
-    if not require_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    file = request.files["file"]
-    text = extract_full_text(file.stream)
-    return jsonify({"text": text})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
@@ -197,22 +191,19 @@ def extract_report():
     file = request.files["file"]
     text = extract_full_text(file.stream)
 
-    patient = extract_patient(text)
-    body = extract_body(text)
-    vitals = extract_vitals(text)
+    # reset stream for table parsing
+    file.stream.seek(0)
+    body_comp = extract_body_composition_tables(file.stream)
+
     hrv = extract_hrv(text)
+    vitals = extract_vitals(text)
     metabolic = extract_metabolic(text)
-    body_composition = extract_body_composition(text)
-    disease = extract_disease(text)
 
     return jsonify({
-        "patient": patient,
-        "body": body,
         "vitals": vitals,
         "hrv": hrv,
         "metabolic": metabolic,
-        "body_composition": body_composition,
-        "disease": disease
+        "body_composition": body_comp
     })
 
 
