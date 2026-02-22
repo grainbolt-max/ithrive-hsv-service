@@ -23,37 +23,33 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "LINE_LOCKED_PRODUCTION_ACTIVE"}), 200
+    return jsonify({"status": "FINAL_TABLE_LOCKED_PRODUCTION_ACTIVE"}), 200
 
 
 # =========================================================
-# LINE LOCKED EXTRACTION HELPERS
+# EXTRACTION HELPERS
 # =========================================================
 
-def extract_value_from_line(line, label):
-    """
-    Extract first numeric value from a line
-    only if the label exists in that same line.
-    """
-    if label.lower() in line.lower():
-        numbers = re.findall(r"[-+]?\d*\.?\d+", line)
+def extract_last_number(line):
+    numbers = re.findall(r"\d*\.?\d+", line)
+    if numbers:
+        return float(numbers[-1])
+    return None
+
+
+def extract_ratio_after_colon(line, label):
+    if label.lower() in line.lower() and ":" in line:
+        after_colon = line.split(":")[-1]
+        numbers = re.findall(r"\d*\.?\d+", after_colon)
         if numbers:
-            try:
-                return float(numbers[0])
-            except:
-                return None
+            return float(numbers[-1])
     return None
 
 
 def extract_bp_from_line(line):
-    """
-    Extract systolic/diastolic from a single line.
-    Example: 110 / 73
-    """
-    if "bp" in line.lower() or "pressure" in line.lower():
-        match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
-        if match:
-            return float(match.group(1)), float(match.group(2))
+    match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
+    if match:
+        return float(match.group(1)), float(match.group(2))
     return None, None
 
 
@@ -71,66 +67,71 @@ def process_pdf(filepath):
     }
 
     with pdfplumber.open(filepath) as pdf:
-
         lines = []
-
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                page_lines = text.split("\n")
-                lines.extend(page_lines)
-
-    # -----------------------------------------------------
-    # Iterate line-by-line (LOCKED)
-    # -----------------------------------------------------
+                lines.extend(text.split("\n"))
 
     for line in lines:
 
-        # -------------------------
-        # Body Composition
-        # -------------------------
+        clean = line.strip()
 
-        weight = extract_value_from_line(line, "Weight")
-        if weight and "weight_lb" not in result["body_composition"]:
-            result["body_composition"]["weight_lb"] = weight
+        # =================================================
+        # BODY COMPOSITION (TABLE SAFE)
+        # =================================================
 
-        fat_mass = extract_value_from_line(line, "Fat Mass")
-        if fat_mass:
-            result["body_composition"]["fat_mass_lb"] = fat_mass
+        if "Weight" in clean and "Target" not in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["body_composition"]["weight_lb"] = value
 
-        fat_free = extract_value_from_line(line, "Fat Free Mass")
-        if fat_free:
-            result["body_composition"]["fat_free_mass_lb"] = fat_free
+        if "Fat Free Mass" in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["body_composition"]["fat_free_mass_lb"] = value
 
-        tbw = extract_value_from_line(line, "Total Body Water")
-        if tbw:
-            result["body_composition"]["total_body_water_lb"] = tbw
+        if "Dry Lean Mass" in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["body_composition"]["dry_lean_mass_lb"] = value
 
-        # -------------------------
+        if "Body Fat Mass" in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["body_composition"]["body_fat_mass_lb"] = value
+
+        if "Total Body Water" in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["body_composition"]["total_body_water_lb"] = value
+
+        # =================================================
         # HRV
-        # -------------------------
+        # =================================================
 
-        k_ratio = extract_value_from_line(line, "30/15")
+        k_ratio = extract_ratio_after_colon(clean, "30/15")
         if k_ratio:
             result["hrv"]["k30_15_ratio"] = k_ratio
 
-        valsalva = extract_value_from_line(line, "Valsalva")
+        valsalva = extract_ratio_after_colon(clean, "Valsalva")
         if valsalva:
             result["hrv"]["valsava_ratio"] = valsalva
 
-        # -------------------------
-        # Metabolic
-        # -------------------------
+        # =================================================
+        # METABOLIC
+        # =================================================
 
-        daily_energy = extract_value_from_line(line, "Daily Energy Expenditure")
-        if daily_energy:
-            result["metabolic"]["daily_energy_expenditure_kcal"] = daily_energy
+        if "Daily Energy Expenditure" in clean and ":" in clean:
+            value = extract_last_number(clean)
+            if value:
+                result["metabolic"]["daily_energy_expenditure_kcal"] = value
 
-        # -------------------------
-        # Blood Pressure (Special Handling)
-        # -------------------------
+        # =================================================
+        # VITALS (BP)
+        # =================================================
 
-        systolic, diastolic = extract_bp_from_line(line)
+        systolic, diastolic = extract_bp_from_line(clean)
         if systolic and diastolic:
             result["vitals"]["systolic_bp"] = systolic
             result["vitals"]["diastolic_bp"] = diastolic
