@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
-BODY_PAGE_INDEX = 6  # locked
+BODY_PAGE_INDEX = 6
 
 
 def safe_float(val):
@@ -17,45 +17,58 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# VECTOR POSITION EXTRACTION (NO OCR)
+# AUTO-DETECT NUMERIC COLUMN
 # ---------------------------------------------------
 def extract_body_vector(pdf_bytes):
     body = {}
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         page = pdf.pages[BODY_PAGE_INDEX]
-
         words = page.extract_words()
 
-        if not words:
+        # Get only numeric tokens
+        numeric_words = []
+        for w in words:
+            if re.fullmatch(r"\d+\.\d+|\d+", w["text"]):
+                numeric_words.append({
+                    "value": safe_float(w["text"]),
+                    "x": w["x0"],
+                    "y": w["top"]
+                })
+
+        if not numeric_words:
             return body
 
-        # Determine page width
-        page_width = page.width
+        # Group by approximate X (column clustering)
+        numeric_words.sort(key=lambda w: w["x"])
 
-        # Keep only words in far-right 30% of page
-        right_words = [
-            w for w in words
-            if w["x0"] > page_width * 0.70
-        ]
+        columns = []
+        for word in numeric_words:
+            placed = False
+            for col in columns:
+                if abs(word["x"] - col[0]["x"]) < 20:  # 20px tolerance
+                    col.append(word)
+                    placed = True
+                    break
+            if not placed:
+                columns.append([word])
 
-        # Extract numeric tokens only
-        numbers = []
-        for w in right_words:
-            if re.fullmatch(r"\d+\.\d+|\d+", w["text"]):
-                numbers.append(safe_float(w["text"]))
+        # Select rightmost column
+        right_column = max(columns, key=lambda col: col[0]["x"])
 
-        # Remove None
-        numbers = [n for n in numbers if n is not None]
+        # Sort top to bottom
+        right_column.sort(key=lambda w: w["y"])
 
-        # Expected vertical order
+        values = [w["value"] for w in right_column if w["value"] is not None]
+
+        # Expect order:
         # Total Body Water
         # Fat Free Mass
         # Weight
-        if len(numbers) >= 3:
-            body["total_body_water_lb"] = numbers[0]
-            body["fat_free_mass_lb"] = numbers[1]
-            body["weight_lb"] = numbers[2]
+        if len(values) >= 3:
+            body["total_body_water_lb"] = values[0]
+            body["fat_free_mass_lb"] = values[1]
+            body["weight_lb"] = values[2]
 
     return body
 
@@ -104,7 +117,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "VECTOR_POSITION_LOCKED"})
+    return jsonify({"status": "COLUMN_AUTO_DETECT_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
