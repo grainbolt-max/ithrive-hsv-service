@@ -18,64 +18,6 @@ def extract_float(pattern, text):
     return None
 
 
-def extract_body_composition_from_text(text):
-    if not text:
-        return None
-
-    body = {}
-
-    body["body_fat_percent"] = extract_float(
-        r"Body\s*Fat\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
-        text
-    )
-
-    body["fat_mass_lbs"] = extract_float(
-        r"Fat\s*Mass\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
-        text
-    )
-
-    body["fat_free_mass_lbs"] = extract_float(
-        r"Fat\s*Free\s*Mass\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
-        text
-    )
-
-    body["total_body_water_percent"] = extract_float(
-        r"Total\s*Body\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
-        text
-    )
-
-    body["intracellular_water_percent"] = extract_float(
-        r"Intra\s*Cellular\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
-        text
-    )
-
-    body["extracellular_water_percent"] = extract_float(
-        r"Extra\s*Cellular\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
-        text
-    )
-
-    body["bmi"] = extract_float(
-        r"Body\s*Mass\s*Index\s*\(BMI\)\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
-        text
-    )
-
-    body["bmr_kcal"] = extract_float(
-        r"Basal\s*Metabolic\s*Rate\s*\(BMR\)\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
-        text
-    )
-
-    body["target_weight_lbs"] = extract_float(
-        r"Target\s*Weight\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
-        text
-    )
-
-    # If everything is None, return None
-    if all(v is None for v in body.values()):
-        return None
-
-    return body
-
-
 def extract_report(pdf_bytes):
     result = {
         "body_composition": None,
@@ -85,36 +27,49 @@ def extract_report(pdf_bytes):
     }
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
+        for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
 
             if not text:
                 continue
 
-            # BODY COMPOSITION PAGE
+            # ---------------------------------------------------
+            # BODY COMPOSITION DEBUG PRINT
+            # ---------------------------------------------------
             if "Body composition and follow up" in text:
-                body_data = extract_body_composition_from_text(text)
-                if body_data:
-                    result["body_composition"] = body_data
+                print("\n==============================")
+                print("BODY PAGE DETECTED")
+                print("Page index:", page_index)
+                print("----- BODY PAGE TEXT START -----")
+                print(text)
+                print("----- BODY PAGE TEXT END -----")
+                print("==============================\n")
 
+            # ---------------------------------------------------
             # HRV
-            if "K30/15" in text:
-                k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-                if k_match:
-                    result["hrv"]["k30_15_ratio"] = float(k_match.group(1))
+            # ---------------------------------------------------
+            k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+            if k_match:
+                result["hrv"]["k30_15_ratio"] = float(k_match.group(1))
 
-            if "Valsalva ratio" in text:
-                v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-                if v_match:
-                    result["hrv"]["valsava_ratio"] = float(v_match.group(1))
+            v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+            if v_match:
+                result["hrv"]["valsava_ratio"] = float(v_match.group(1))
 
+            # ---------------------------------------------------
             # Daily Energy Expenditure
+            # ---------------------------------------------------
             dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)\s*Kcal", text)
             if dee_match:
                 result["metabolic"]["daily_energy_expenditure_kcal"] = float(dee_match.group(1))
 
+            # ---------------------------------------------------
             # Blood Pressure
-            bp_match = re.search(r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)", text)
+            # ---------------------------------------------------
+            bp_match = re.search(
+                r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
+                text
+            )
             if bp_match:
                 result["vitals"]["systolic_bp"] = float(bp_match.group(1))
                 result["vitals"]["diastolic_bp"] = float(bp_match.group(2))
@@ -124,7 +79,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "REGEX_BODY_VERSION_ACTIVE"})
+    return jsonify({"status": "BODY_TEXT_DEBUG_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
