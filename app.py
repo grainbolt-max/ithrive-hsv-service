@@ -18,15 +18,29 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# OCR BODY PAGE (Memory Safe + Robust Parsing)
+# OCR BODY PAGE (Auto-detect correct page)
 # ---------------------------------------------------
 def ocr_body_page(pdf_bytes):
     try:
+        # First detect which page contains body composition
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            body_page_index = None
+
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if text and "Body Composition" in text:
+                    body_page_index = i
+                    break
+
+        if body_page_index is None:
+            return {}
+
+        # OCR only that specific page
         images = convert_from_bytes(
             pdf_bytes,
             dpi=150,
-            first_page=1,
-            last_page=1
+            first_page=body_page_index + 1,
+            last_page=body_page_index + 1
         )
 
         for image in images:
@@ -45,8 +59,7 @@ def ocr_body_page(pdf_bytes):
             for key, pattern in patterns.items():
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
-                    value = match.groups()[-1]
-                    body[key] = safe_float(value)
+                    body[key] = safe_float(match.groups()[-1])
 
             return body
 
@@ -67,10 +80,10 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    # OCR for body page
+    # OCR body
     result["body_composition"] = ocr_body_page(pdf_bytes)
 
-    # Text-based extraction for other pages
+    # Text extraction for other values
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
@@ -78,7 +91,6 @@ def extract_report(pdf_bytes):
                 if not text:
                     continue
 
-                # HRV
                 k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
                 if k_match:
                     result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
@@ -87,12 +99,10 @@ def extract_report(pdf_bytes):
                 if v_match:
                     result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
 
-                # Daily Energy Expenditure
                 dee_match = re.search(r"Daily Energy Expenditure[^0-9]*([0-9]+)", text)
                 if dee_match:
                     result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
 
-                # Blood Pressure
                 bp_match = re.search(
                     r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
                     text
@@ -107,12 +117,9 @@ def extract_report(pdf_bytes):
     return result
 
 
-# ---------------------------------------------------
-# ROUTES
-# ---------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "FINAL_OCR_BODY_VERSION_ACTIVE"})
+    return jsonify({"status": "FINAL_DYNAMIC_OCR_VERSION_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
