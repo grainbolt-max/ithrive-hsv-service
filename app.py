@@ -24,14 +24,14 @@ def safe_float(val):
 # ---------------------------------------------------
 def preprocess_image(image: Image.Image) -> Image.Image:
     gray = image.convert("L")
-    binary = gray.point(lambda x: 255 if x > 170 else 0, mode="1")
+    binary = gray.point(lambda x: 255 if x > 165 else 0, mode="1")
     return binary
 
 
 # ---------------------------------------------------
-# NUMERIC POSITION OCR EXTRACTION
+# CROPPED OCR EXTRACTION
 # ---------------------------------------------------
-def extract_body_numeric(pdf_bytes):
+def extract_body_cropped(pdf_bytes):
     body = {}
 
     try:
@@ -45,48 +45,37 @@ def extract_body_numeric(pdf_bytes):
         if not images:
             return body
 
-        image = preprocess_image(images[0])
+        image = images[0]
+
+        width, height = image.size
+
+        # Crop upper-right quadrant (summary metrics area)
+        cropped = image.crop((
+            width * 0.45,   # left
+            height * 0.05,  # top
+            width * 0.95,   # right
+            height * 0.45   # bottom
+        ))
+
+        processed = preprocess_image(cropped)
 
         config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.'
 
-        text = pytesseract.image_to_string(image, config=config)
+        text = pytesseract.image_to_string(processed, config=config)
 
-        # Extract all numeric tokens
         numbers = re.findall(r'\d+\.\d+|\d+', text)
-
         numbers = [safe_float(n) for n in numbers]
         numbers = [n for n in numbers if n is not None]
 
-        # Filter realistic body composition values (lb)
-        realistic = []
-
-        for n in numbers:
-            if 50 <= n <= 400:  # plausible lb values
-                realistic.append(n)
-
-        # Remove duplicates while preserving order
-        seen = set()
-        filtered = []
-        for n in realistic:
-            if n not in seen:
-                filtered.append(n)
-                seen.add(n)
-
-        # We expect at least 3 key values
-        # Based on layout: TBW, FFM, Weight, Fat Mass
-        if len(filtered) >= 4:
-            body["total_body_water_lb"] = filtered[0]
-            body["fat_free_mass_lb"] = filtered[1]
-            body["weight_lb"] = filtered[2]
-            body["fat_mass_lb"] = filtered[3]
-
-        elif len(filtered) >= 3:
-            body["total_body_water_lb"] = filtered[0]
-            body["fat_free_mass_lb"] = filtered[1]
-            body["weight_lb"] = filtered[2]
+        # Expecting 3 primary values in order:
+        # Total Body Water, Fat Free Mass, Weight
+        if len(numbers) >= 3:
+            body["total_body_water_lb"] = numbers[0]
+            body["fat_free_mass_lb"] = numbers[1]
+            body["weight_lb"] = numbers[2]
 
     except Exception as e:
-        print("OCR ERROR:", e)
+        print("CROPPED OCR ERROR:", e)
 
     return body
 
@@ -102,7 +91,7 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    result["body_composition"] = extract_body_numeric(pdf_bytes)
+    result["body_composition"] = extract_body_cropped(pdf_bytes)
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -139,7 +128,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "NUMERIC_POSITION_OCR_ACTIVE"})
+    return jsonify({"status": "CROPPED_OCR_FINAL_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
