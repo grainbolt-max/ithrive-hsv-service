@@ -17,6 +17,24 @@ def require_auth(req):
 
 
 # ------------------------------------------------------------
+# HELPERS
+# ------------------------------------------------------------
+
+def to_float(val):
+    try:
+        return float(str(val).replace("%", "").strip())
+    except:
+        return None
+
+
+def extract_percent(text):
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)
+    if match:
+        return float(match.group(1))
+    return None
+
+
+# ------------------------------------------------------------
 # TEXT EXTRACTION
 # ------------------------------------------------------------
 
@@ -31,11 +49,11 @@ def extract_full_text(file_stream):
 
 
 # ------------------------------------------------------------
-# TABLE EXTRACTION (DETERMINISTIC BODY COMPOSITION)
+# STRICT BODY COMPOSITION PARSER (PAGE 7 FIXED FORMAT)
 # ------------------------------------------------------------
 
-def extract_body_composition_tables(file_stream):
-    results = {
+def extract_body_composition(file_stream):
+    result = {
         "intra_cellular_water_lb": None,
         "extra_cellular_water_lb": None,
         "dry_lean_mass_lb": None,
@@ -55,7 +73,11 @@ def extract_body_composition_tables(file_stream):
     with pdfplumber.open(file_stream) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
-            if text and "Body Composition Indicators (lb)" in text:
+            if not text:
+                continue
+
+            if "Body Composition Indicators (lb)" in text:
+
                 tables = page.extract_tables()
 
                 for table in tables:
@@ -63,95 +85,62 @@ def extract_body_composition_tables(file_stream):
                         if not row:
                             continue
 
-                        row_text = " ".join([str(cell) for cell in row if cell])
+                        row_label = str(row[0]).strip()
 
-                        # ----- LB VALUES -----
-                        if "Intra Cellular Water" in row_text:
-                            results["intra_cellular_water_lb"] = safe_float(row)
-                        if "Extra Cellular Water" in row_text:
-                            results["extra_cellular_water_lb"] = safe_float(row)
-                        if "Dry Lean Mass" in row_text:
-                            results["dry_lean_mass_lb"] = safe_float(row)
-                        if "Body Fat Mass" in row_text:
-                            results["body_fat_mass_lb"] = safe_float(row)
-                        if "Total Body Water" in row_text:
-                            results["total_body_water_lb"] = safe_float(row)
-                        if "Fat Free Mass" in row_text:
-                            results["fat_free_mass_lb"] = safe_float(row)
-                        if "Weight" in row_text and results["weight_lb"] is None:
-                            results["weight_lb"] = safe_float(row)
+                        # ----- MAIN LB TABLE -----
+                        if row_label == "Intra Cellular Water":
+                            result["intra_cellular_water_lb"] = to_float(row[1])
+                        if row_label == "Extra Cellular Water":
+                            result["extra_cellular_water_lb"] = to_float(row[1])
+                        if row_label == "Dry Lean Mass":
+                            result["dry_lean_mass_lb"] = to_float(row[1])
+                        if row_label == "Body Fat Mass":
+                            result["body_fat_mass_lb"] = to_float(row[1])
 
-                        # ----- PERCENT VALUES -----
-                        if "%" in row_text:
-                            if "Fat Free Mass" in row_text:
-                                results["fat_free_mass_percent"] = extract_percent(row_text)
-                            if "Body Fat Mass" in row_text:
-                                results["body_fat_percent"] = extract_percent(row_text)
-                            if "Total Body Water" in row_text:
-                                results["total_body_water_percent"] = extract_percent(row_text)
-                            if "Intra Cellular Water" in row_text:
-                                results["intra_cellular_water_percent"] = extract_percent(row_text)
-                            if "Extra Cellular Water" in row_text:
-                                results["extra_cellular_water_percent"] = extract_percent(row_text)
+                        # These are in wider row format
+                        if row_label == "Total Body Water":
+                            result["total_body_water_lb"] = to_float(row[2])
+                        if row_label == "Fat Free Mass":
+                            result["fat_free_mass_lb"] = to_float(row[3])
+                        if row_label == "Weight":
+                            result["weight_lb"] = to_float(row[4])
 
-                        if "Body Mass Index" in row_text:
-                            results["bmi"] = extract_number(row_text)
+                        # ----- PERCENT ANALYSIS TABLE -----
+                        if row_label == "Fat Free Mass" and "%" in str(row):
+                            result["fat_free_mass_percent"] = extract_percent(str(row))
+                        if row_label == "Body Fat Mass" and "%" in str(row):
+                            result["body_fat_percent"] = extract_percent(str(row))
+                        if row_label == "Total Body Water" and "%" in str(row):
+                            result["total_body_water_percent"] = extract_percent(str(row))
+                        if row_label == "Intra Cellular Water" and "%" in str(row):
+                            result["intra_cellular_water_percent"] = extract_percent(str(row))
+                        if row_label == "Extra Cellular Water" and "%" in str(row):
+                            result["extra_cellular_water_percent"] = extract_percent(str(row))
 
-                        if "Basal Metabolic Rate" in row_text:
-                            results["basal_metabolic_rate_kcal"] = extract_number(row_text)
+                        # ----- BMI / BMR -----
+                        if "Body Mass Index" in row_label:
+                            result["bmi"] = to_float(row[1])
 
-                break  # stop once page found
+                        if "Basal Metabolic Rate" in row_label:
+                            result["basal_metabolic_rate_kcal"] = to_float(row[1])
 
-    return results
+                break  # stop after page found
 
-
-# ------------------------------------------------------------
-# HELPERS
-# ------------------------------------------------------------
-
-def safe_float(row):
-    for cell in row:
-        try:
-            return float(cell)
-        except:
-            continue
-    return None
-
-
-def extract_percent(text):
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)
-    if match:
-        return float(match.group(1))
-    return None
-
-
-def extract_number(text):
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
-    if match:
-        return float(match.group(1))
-    return None
+    return result
 
 
 # ------------------------------------------------------------
-# HRV + VITALS + METABOLIC (UNCHANGED)
+# HRV + VITALS + METABOLIC
 # ------------------------------------------------------------
 
 def extract_hrv(text):
-    k30 = extract_number_section(text, "K30/15")
-    valsalva = extract_number_section(text, "Valsalva ratio")
+    k30 = re.search(r"K30/15[\s\S]*?Value:\s*([0-9\.]+)", text)
+    valsalva = re.search(r"Valsalva ratio[\s\S]*?Value:\s*([0-9\.]+)", text)
 
     return {
-        "k30_15_ratio": k30,
-        "valsava_ratio": valsalva
+        "k30_15_ratio": float(k30.group(1)) if k30 else None,
+        "valsava_ratio": float(valsalva.group(1)) if valsalva else None
     }
-
-
-def extract_number_section(text, section_name):
-    pattern = rf"{section_name}[\s\S]*?Value:\s*([0-9\.]+)"
-    match = re.search(pattern, text)
-    if match:
-        return float(match.group(1))
-    return None
 
 
 def extract_vitals(text):
@@ -189,21 +178,17 @@ def extract_report():
         return jsonify({"error": "No file provided"}), 400
 
     file = request.files["file"]
+
     text = extract_full_text(file.stream)
 
-    # reset stream for table parsing
     file.stream.seek(0)
-    body_comp = extract_body_composition_tables(file.stream)
-
-    hrv = extract_hrv(text)
-    vitals = extract_vitals(text)
-    metabolic = extract_metabolic(text)
+    body = extract_body_composition(file.stream)
 
     return jsonify({
-        "vitals": vitals,
-        "hrv": hrv,
-        "metabolic": metabolic,
-        "body_composition": body_comp
+        "vitals": extract_vitals(text),
+        "hrv": extract_hrv(text),
+        "metabolic": extract_metabolic(text),
+        "body_composition": body
     })
 
 
