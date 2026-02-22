@@ -1,158 +1,151 @@
-from flask import Flask, request, jsonify
-import pdfplumber
+import io
 import re
-import os
+import pdfplumber
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-API_KEY = os.environ.get("PREPROCESS_API_KEY", "ithrive_secure_2026_key")
+AUTH_TOKEN = "ithrive_secure_2026_key"
 
-# ============================================================
-# AUTH
-# ============================================================
 
-def require_auth(req):
-    auth = req.headers.get("Authorization", "")
-    return auth == f"Bearer {API_KEY}"
+def extract_float(pattern, text):
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1))
+        except:
+            return None
+    return None
 
-# ============================================================
-# TEXT EXTRACTION
-# ============================================================
 
-def extract_full_text(file_stream):
-    text = ""
-    with pdfplumber.open(file_stream) as pdf:
+def extract_body_composition_from_text(text):
+    if not text:
+        return None
+
+    body = {}
+
+    body["body_fat_percent"] = extract_float(
+        r"Body\s*Fat\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
+        text
+    )
+
+    body["fat_mass_lbs"] = extract_float(
+        r"Fat\s*Mass\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
+        text
+    )
+
+    body["fat_free_mass_lbs"] = extract_float(
+        r"Fat\s*Free\s*Mass\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
+        text
+    )
+
+    body["total_body_water_percent"] = extract_float(
+        r"Total\s*Body\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
+        text
+    )
+
+    body["intracellular_water_percent"] = extract_float(
+        r"Intra\s*Cellular\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
+        text
+    )
+
+    body["extracellular_water_percent"] = extract_float(
+        r"Extra\s*Cellular\s*Water\s*[:\-]?\s*([0-9]+\.?[0-9]*)\s*%",
+        text
+    )
+
+    body["bmi"] = extract_float(
+        r"Body\s*Mass\s*Index\s*\(BMI\)\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
+        text
+    )
+
+    body["bmr_kcal"] = extract_float(
+        r"Basal\s*Metabolic\s*Rate\s*\(BMR\)\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
+        text
+    )
+
+    body["target_weight_lbs"] = extract_float(
+        r"Target\s*Weight\s*[:\-]?\s*([0-9]+\.?[0-9]*)",
+        text
+    )
+
+    # If everything is None, return None
+    if all(v is None for v in body.values()):
+        return None
+
+    return body
+
+
+def extract_report(pdf_bytes):
+    result = {
+        "body_composition": None,
+        "hrv": {},
+        "metabolic": {},
+        "vitals": {}
+    }
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += "\n" + page_text
-    return text
-
-# ============================================================
-# BODY COMPOSITION DEBUG
-# ============================================================
-
-def debug_body_composition(file_stream):
-    with pdfplumber.open(file_stream) as pdf:
-        for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
 
-            # Match actual text in your PDF
-            if text and "Body composition and follow up" in text:
+            if not text:
+                continue
 
-                print("\n==============================")
-                print("BODY COMPOSITION PAGE FOUND")
-                print("Page index:", page_index)
-                print("==============================\n")
+            # BODY COMPOSITION PAGE
+            if "Body composition and follow up" in text:
+                body_data = extract_body_composition_from_text(text)
+                if body_data:
+                    result["body_composition"] = body_data
 
-                tables = page.extract_tables()
-                print("TABLE COUNT:", len(tables))
+            # HRV
+            if "K30/15" in text:
+                k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+                if k_match:
+                    result["hrv"]["k30_15_ratio"] = float(k_match.group(1))
 
-                for t_index, table in enumerate(tables):
-                    print("\n--- TABLE", t_index, "---")
-                    for row in table:
-                        print(row)
+            if "Valsalva ratio" in text:
+                v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+                if v_match:
+                    result["hrv"]["valsava_ratio"] = float(v_match.group(1))
 
-                print("\n==============================\n")
-                break
+            # Daily Energy Expenditure
+            dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)\s*Kcal", text)
+            if dee_match:
+                result["metabolic"]["daily_energy_expenditure_kcal"] = float(dee_match.group(1))
 
-# ============================================================
-# HRV EXTRACTION
-# ============================================================
+            # Blood Pressure
+            bp_match = re.search(r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)", text)
+            if bp_match:
+                result["vitals"]["systolic_bp"] = float(bp_match.group(1))
+                result["vitals"]["diastolic_bp"] = float(bp_match.group(2))
 
-def extract_hrv(text):
-    k30 = re.search(r"K30/15[\s\S]*?Value:\s*([0-9\.]+)", text)
-    valsalva = re.search(r"Valsalva ratio[\s\S]*?Value:\s*([0-9\.]+)", text)
+    return result
 
-    return {
-        "k30_15_ratio": float(k30.group(1)) if k30 else None,
-        "valsava_ratio": float(valsalva.group(1)) if valsalva else None
-    }
-
-# ============================================================
-# VITALS EXTRACTION
-# ============================================================
-
-def extract_vitals(text):
-    match = re.search(
-        r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)",
-        text
-    )
-
-    if match:
-        return {
-            "systolic_bp": float(match.group(1)),
-            "diastolic_bp": float(match.group(2))
-        }
-
-    return {
-        "systolic_bp": None,
-        "diastolic_bp": None
-    }
-
-# ============================================================
-# METABOLIC EXTRACTION
-# ============================================================
-
-def extract_metabolic(text):
-    match = re.search(
-        r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)",
-        text
-    )
-
-    if match:
-        return {
-            "daily_energy_expenditure_kcal": float(match.group(1))
-        }
-
-    return {
-        "daily_energy_expenditure_kcal": None
-    }
-
-# ============================================================
-# ROOT ROUTE (VERSION VERIFICATION)
-# ============================================================
 
 @app.route("/", methods=["GET"])
-def root():
-    return jsonify({
-        "status": "BODY_DEBUG_VERSION_ACTIVE"
-    })
+def health():
+    return jsonify({"status": "REGEX_BODY_VERSION_ACTIVE"})
 
-# ============================================================
-# EXTRACT REPORT
-# ============================================================
 
 @app.route("/v1/extract-report", methods=["POST"])
-def extract_report():
+def extract_report_endpoint():
+    auth_header = request.headers.get("Authorization")
 
-    if not require_auth(request):
+    if auth_header != f"Bearer {AUTH_TOKEN}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
     file = request.files["file"]
+    pdf_bytes = file.read()
 
-    # Extract text
-    text = extract_full_text(file.stream)
+    try:
+        result = extract_report(pdf_bytes)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    # Reset stream for debug
-    file.stream.seek(0)
-
-    # Debug body composition page
-    debug_body_composition(file.stream)
-
-    return jsonify({
-        "vitals": extract_vitals(text),
-        "hrv": extract_hrv(text),
-        "metabolic": extract_metabolic(text),
-        "body_composition": None
-    })
-
-# ============================================================
-# ENTRYPOINT
-# ============================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
