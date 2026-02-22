@@ -17,19 +17,27 @@ def safe_float(val):
         return None
 
 
+# ---------------------------------------------------
+# OCR BODY PAGE (Memory Safe)
+# ---------------------------------------------------
 def ocr_body_page(pdf_bytes):
-    images = convert_from_bytes(pdf_bytes, dpi=300)
+    try:
+        images = convert_from_bytes(
+            pdf_bytes,
+            dpi=150,
+            first_page=1,
+            last_page=1
+        )
 
-    for image in images:
-        text = pytesseract.image_to_string(image)
+        for image in images:
+            text = pytesseract.image_to_string(image)
 
-        if "Body Composition Indicators" in text:
             body = {}
 
             weight = re.search(r"Weight.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
             fat_mass = re.search(r"Fat\s*Mass.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
             ffm = re.search(r"Fat\s*Free\s*Mass.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
-            body_fat = re.search(r"Percent\s*Body\s*Fat.*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
+            body_fat = re.search(r"(Percent\s*Body\s*Fat|Body\s*Fat).*?([0-9]+\.?[0-9]*)", text, re.IGNORECASE)
 
             if weight:
                 body["weight_lb"] = safe_float(weight.group(1))
@@ -38,13 +46,21 @@ def ocr_body_page(pdf_bytes):
             if ffm:
                 body["fat_free_mass_lb"] = safe_float(ffm.group(1))
             if body_fat:
-                body["body_fat_percent"] = safe_float(body_fat.group(1))
+                # if 2 groups exist, last group is number
+                value = body_fat.groups()[-1]
+                body["body_fat_percent"] = safe_float(value)
 
             return body
+
+    except Exception as e:
+        print("OCR ERROR:", e)
 
     return {}
 
 
+# ---------------------------------------------------
+# MAIN EXTRACTION
+# ---------------------------------------------------
 def extract_report(pdf_bytes):
     result = {
         "body_composition": {},
@@ -53,42 +69,52 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    # OCR for body
+    # OCR body
     result["body_composition"] = ocr_body_page(pdf_bytes)
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
+    # Text-based extraction for other pages
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
+                    continue
 
-            if not text:
-                continue
+                # HRV
+                k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+                if k_match:
+                    result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
 
-            k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-            if k_match:
-                result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
+                v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+                if v_match:
+                    result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
 
-            v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-            if v_match:
-                result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
+                # Energy
+                dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)", text)
+                if dee_match:
+                    result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
 
-            dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)", text)
-            if dee_match:
-                result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
+                # Blood Pressure
+                bp_match = re.search(
+                    r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
+                    text
+                )
+                if bp_match:
+                    result["vitals"]["systolic_bp"] = safe_float(bp_match.group(1))
+                    result["vitals"]["diastolic_bp"] = safe_float(bp_match.group(2))
 
-            bp_match = re.search(
-                r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
-                text
-            )
-            if bp_match:
-                result["vitals"]["systolic_bp"] = safe_float(bp_match.group(1))
-                result["vitals"]["diastolic_bp"] = safe_float(bp_match.group(2))
+    except Exception as e:
+        print("TEXT EXTRACTION ERROR:", e)
 
     return result
 
 
+# ---------------------------------------------------
+# ROUTES
+# ---------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "OCR_BODY_VERSION_ACTIVE"})
+    return jsonify({"status": "OCR_MEMORY_SAFE_VERSION_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
@@ -108,6 +134,7 @@ def extract_report_endpoint():
         result = extract_report(pdf_bytes)
         return jsonify(result)
     except Exception as e:
+        print("ENDPOINT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
 
