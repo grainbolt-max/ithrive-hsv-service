@@ -25,7 +25,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "GENERIC_COLUMN_LOCKED_PRODUCTION_ACTIVE"}), 200
+    return jsonify({"status": "PAGE_SCOPED_COLUMN_LOCKED_PRODUCTION_ACTIVE"}), 200
 
 
 # =========================================================
@@ -44,44 +44,65 @@ def group_words_by_row(words, tolerance=3):
     return rows.values()
 
 
-def detect_numeric_column(words):
-    numeric_x = []
+def cluster_numeric_columns(words):
+    clusters = []
 
-    for w in words:
-        if is_number(w["text"]):
-            numeric_x.append(w["x0"])
+    numeric_words = [w for w in words if is_number(w["text"])]
 
-    if not numeric_x:
-        return None
+    for w in numeric_words:
+        placed = False
+        for cluster in clusters:
+            if abs(cluster["center"] - w["x0"]) < 25:
+                cluster["values"].append(w)
+                cluster["center"] = median([v["x0"] for v in cluster["values"]])
+                placed = True
+                break
+        if not placed:
+            clusters.append({
+                "center": w["x0"],
+                "values": [w]
+            })
 
-    # cluster via median band detection
-    center = median(numeric_x)
-
-    # determine band (±40px safe window)
-    return (center - 40, center + 40)
+    return clusters
 
 
-def detect_label_column(words):
-    text_x = []
+def select_value_column(clusters):
+    """
+    Select cluster with realistic lb values and highest density.
+    """
+    best_cluster = None
+    best_score = 0
 
-    for w in words:
-        if not is_number(w["text"]):
-            text_x.append(w["x0"])
+    for cluster in clusters:
+        numeric_vals = [float(v["text"]) for v in cluster["values"]]
+        realistic_vals = [v for v in numeric_vals if 20 <= v <= 400]
 
+        score = len(realistic_vals)
+
+        if score > best_score:
+            best_score = score
+            best_cluster = cluster
+
+    if best_cluster:
+        center = best_cluster["center"]
+        return (center - 40, center + 40)
+
+    return None
+
+
+def detect_label_band(words):
+    text_x = [w["x0"] for w in words if not is_number(w["text"])]
     if not text_x:
         return None
-
     center = median(text_x)
-    return (center - 80, center + 80)
+    return (center - 120, center + 120)
 
 
 def extract_bp_from_text(full_text):
     systolic = None
     diastolic = None
 
-    lines = full_text.split("\n")
-
-    for line in lines:
+    for line in full_text.split("\n"):
         lower = line.lower()
         if any(k in lower for k in ["blood", "pressure", "bp", "systolic"]):
             match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
@@ -94,20 +115,15 @@ def extract_bp_from_text(full_text):
 
 def extract_hrv(full_text):
     result = {}
-
-    lines = full_text.split("\n")
-
-    for line in lines:
+    for line in full_text.split("\n"):
         if "30/15" in line and ":" in line:
-            numbers = re.findall(r"\d+(\.\d+)?", line)
-            if numbers:
-                result["k30_15_ratio"] = float(numbers[-1])
-
+            nums = re.findall(r"\d+(\.\d+)?", line)
+            if nums:
+                result["k30_15_ratio"] = float(nums[-1])
         if "Valsalva" in line and ":" in line:
-            numbers = re.findall(r"\d+(\.\d+)?", line)
-            if numbers:
-                result["valsava_ratio"] = float(numbers[-1])
-
+            nums = re.findall(r"\d+(\.\d+)?", line)
+            if nums:
+                result["valsava_ratio"] = float(nums[-1])
     return result
 
 
@@ -124,65 +140,73 @@ def process_pdf(filepath):
         "vitals": {}
     }
 
-    all_words = []
     full_text = ""
 
     with pdfplumber.open(filepath) as pdf:
+
         for page in pdf.pages:
-            full_text += page.extract_text() or ""
-            all_words.extend(page.extract_words())
 
-    if not all_words:
-        return result
+            page_text = page.extract_text() or ""
+            full_text += page_text
 
-    value_band = detect_numeric_column(all_words)
-    label_band = detect_label_column(all_words)
+            # Only process body composition page
+            if not any(keyword in page_text for keyword in [
+                "Weight",
+                "Fat Free Mass",
+                "Body Fat Mass",
+                "Dry Lean Mass"
+            ]):
+                continue
 
-    if not value_band or not label_band:
-        return result
+            words = page.extract_words()
+            rows = group_words_by_row(words)
 
-    rows = group_words_by_row(all_words)
+            clusters = cluster_numeric_columns(words)
+            value_band = select_value_column(clusters)
+            label_band = detect_label_band(words)
 
-    for row in rows:
+            if not value_band or not label_band:
+                continue
 
-        label_parts = []
-        value = None
+            for row in rows:
 
-        for w in row:
-            x = w["x0"]
-            text = w["text"]
+                label_parts = []
+                value = None
 
-            if label_band[0] <= x <= label_band[1] and not is_number(text):
-                label_parts.append(text)
+                for w in row:
+                    x = w["x0"]
+                    text = w["text"]
 
-            if value_band[0] <= x <= value_band[1] and is_number(text):
-                value = float(text)
+                    if label_band[0] <= x <= label_band[1] and not is_number(text):
+                        label_parts.append(text)
 
-        if not label_parts or value is None:
-            continue
+                    if value_band[0] <= x <= value_band[1] and is_number(text):
+                        value = float(text)
 
-        label = " ".join(label_parts)
+                if not label_parts or value is None:
+                    continue
 
-        # BODY COMPOSITION
-        if "Weight" in label and "Target" not in label:
-            result["body_composition"]["weight_lb"] = value
+                label = " ".join(label_parts)
 
-        elif "Fat Free Mass" in label:
-            result["body_composition"]["fat_free_mass_lb"] = value
+                if "Weight" in label and "Target" not in label:
+                    result["body_composition"]["weight_lb"] = value
 
-        elif "Body Fat Mass" in label:
-            result["body_composition"]["body_fat_mass_lb"] = value
+                elif "Fat Free Mass" in label:
+                    result["body_composition"]["fat_free_mass_lb"] = value
 
-        elif "Dry Lean Mass" in label:
-            result["body_composition"]["dry_lean_mass_lb"] = value
+                elif "Body Fat Mass" in label:
+                    result["body_composition"]["body_fat_mass_lb"] = value
 
-        elif "Total Body Water" in label:
-            result["body_composition"]["total_body_water_lb"] = value
+                elif "Dry Lean Mass" in label:
+                    result["body_composition"]["dry_lean_mass_lb"] = value
 
-        elif "Daily Energy Expenditure" in label:
-            result["metabolic"]["daily_energy_expenditure_kcal"] = value
+                elif "Total Body Water" in label:
+                    result["body_composition"]["total_body_water_lb"] = value
 
-    # Separate extraction (never table-based)
+                elif "Daily Energy Expenditure" in label:
+                    result["metabolic"]["daily_energy_expenditure_kcal"] = value
+
+    # Extract vitals + HRV separately
     systolic, diastolic = extract_bp_from_text(full_text)
     if systolic and diastolic:
         result["vitals"]["systolic_bp"] = systolic
@@ -201,7 +225,6 @@ def process_pdf(filepath):
 def extract_report():
 
     try:
-
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {API_KEY}":
             return jsonify({"error": "Unauthorized"}), 401
