@@ -23,26 +23,38 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "FINAL_LOCKED_OCR_ACTIVE"}), 200
+    return jsonify({"status": "LINE_LOCKED_PRODUCTION_ACTIVE"}), 200
 
 
 # =========================================================
-# SAFE NUMERIC EXTRACTION
+# LINE LOCKED EXTRACTION HELPERS
 # =========================================================
 
-def extract_numeric_after_label(text, label):
+def extract_value_from_line(line, label):
     """
-    Finds first numeric value after a label.
-    Hard-stable deterministic extraction.
+    Extract first numeric value from a line
+    only if the label exists in that same line.
     """
-    pattern = rf"{label}[^0-9\-\.]*([-+]?\d*\.?\d+)"
-    match = re.search(pattern, text, re.IGNORECASE)
-    if match:
-        try:
-            return float(match.group(1))
-        except:
-            return None
+    if label.lower() in line.lower():
+        numbers = re.findall(r"[-+]?\d*\.?\d+", line)
+        if numbers:
+            try:
+                return float(numbers[0])
+            except:
+                return None
     return None
+
+
+def extract_bp_from_line(line):
+    """
+    Extract systolic/diastolic from a single line.
+    Example: 110 / 73
+    """
+    if "bp" in line.lower() or "pressure" in line.lower():
+        match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
+        if match:
+            return float(match.group(1)), float(match.group(2))
+    return None, None
 
 
 # =========================================================
@@ -50,13 +62,6 @@ def extract_numeric_after_label(text, label):
 # =========================================================
 
 def process_pdf(filepath):
-    """
-    Deterministic extraction.
-    No printing.
-    No streaming.
-    No debug.
-    Always returns structured dict.
-    """
 
     result = {
         "body_composition": {},
@@ -67,62 +72,68 @@ def process_pdf(filepath):
 
     with pdfplumber.open(filepath) as pdf:
 
-        full_text = ""
+        lines = []
+
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                full_text += "\n" + text
+                page_lines = text.split("\n")
+                lines.extend(page_lines)
 
-    # -------------------------
-    # Body Composition
-    # -------------------------
+    # -----------------------------------------------------
+    # Iterate line-by-line (LOCKED)
+    # -----------------------------------------------------
 
-    weight = extract_numeric_after_label(full_text, "Weight")
-    fat_mass = extract_numeric_after_label(full_text, "Fat Mass")
-    fat_free_mass = extract_numeric_after_label(full_text, "Fat Free Mass")
-    tbw = extract_numeric_after_label(full_text, "Total Body Water")
+    for line in lines:
 
-    if weight:
-        result["body_composition"]["weight_lb"] = weight
-    if fat_mass:
-        result["body_composition"]["fat_mass_lb"] = fat_mass
-    if fat_free_mass:
-        result["body_composition"]["fat_free_mass_lb"] = fat_free_mass
-    if tbw:
-        result["body_composition"]["total_body_water_lb"] = tbw
+        # -------------------------
+        # Body Composition
+        # -------------------------
 
-    # -------------------------
-    # HRV
-    # -------------------------
+        weight = extract_value_from_line(line, "Weight")
+        if weight and "weight_lb" not in result["body_composition"]:
+            result["body_composition"]["weight_lb"] = weight
 
-    k_ratio = extract_numeric_after_label(full_text, "30/15")
-    valsalva = extract_numeric_after_label(full_text, "Valsalva")
+        fat_mass = extract_value_from_line(line, "Fat Mass")
+        if fat_mass:
+            result["body_composition"]["fat_mass_lb"] = fat_mass
 
-    if k_ratio:
-        result["hrv"]["k30_15_ratio"] = k_ratio
-    if valsalva:
-        result["hrv"]["valsava_ratio"] = valsalva
+        fat_free = extract_value_from_line(line, "Fat Free Mass")
+        if fat_free:
+            result["body_composition"]["fat_free_mass_lb"] = fat_free
 
-    # -------------------------
-    # Metabolic
-    # -------------------------
+        tbw = extract_value_from_line(line, "Total Body Water")
+        if tbw:
+            result["body_composition"]["total_body_water_lb"] = tbw
 
-    daily_energy = extract_numeric_after_label(full_text, "Daily Energy Expenditure")
+        # -------------------------
+        # HRV
+        # -------------------------
 
-    if daily_energy:
-        result["metabolic"]["daily_energy_expenditure_kcal"] = daily_energy
+        k_ratio = extract_value_from_line(line, "30/15")
+        if k_ratio:
+            result["hrv"]["k30_15_ratio"] = k_ratio
 
-    # -------------------------
-    # Vitals
-    # -------------------------
+        valsalva = extract_value_from_line(line, "Valsalva")
+        if valsalva:
+            result["hrv"]["valsava_ratio"] = valsalva
 
-    systolic = extract_numeric_after_label(full_text, "Systolic")
-    diastolic = extract_numeric_after_label(full_text, "Diastolic")
+        # -------------------------
+        # Metabolic
+        # -------------------------
 
-    if systolic:
-        result["vitals"]["systolic_bp"] = systolic
-    if diastolic:
-        result["vitals"]["diastolic_bp"] = diastolic
+        daily_energy = extract_value_from_line(line, "Daily Energy Expenditure")
+        if daily_energy:
+            result["metabolic"]["daily_energy_expenditure_kcal"] = daily_energy
+
+        # -------------------------
+        # Blood Pressure (Special Handling)
+        # -------------------------
+
+        systolic, diastolic = extract_bp_from_line(line)
+        if systolic and diastolic:
+            result["vitals"]["systolic_bp"] = systolic
+            result["vitals"]["diastolic_bp"] = diastolic
 
     return result
 
@@ -135,6 +146,7 @@ def process_pdf(filepath):
 def extract_report():
 
     try:
+
         # -------------------------
         # AUTH
         # -------------------------
@@ -172,17 +184,11 @@ def extract_report():
         # -------------------------
         os.remove(tmp_path)
 
-        # -------------------------
-        # RETURN JSON ONLY
-        # -------------------------
         return jsonify(result), 200
 
-    except Exception as e:
-        # HARD FAIL SAFE
+    except Exception:
         traceback.print_exc()
-        return jsonify({
-            "error": "Internal processing error"
-        }), 500
+        return jsonify({"error": "Internal processing error"}), 500
 
 
 # =========================================================
