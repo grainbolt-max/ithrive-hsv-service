@@ -2,6 +2,8 @@ import os
 import re
 import tempfile
 import traceback
+from collections import defaultdict
+from statistics import median
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import pdfplumber
@@ -23,49 +25,94 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "FINAL_PRODUCTION_LOCKED_ACTIVE"}), 200
+    return jsonify({"status": "GENERIC_COLUMN_LOCKED_PRODUCTION_ACTIVE"}), 200
 
 
 # =========================================================
-# EXTRACTION HELPERS
+# UTILITIES
 # =========================================================
 
-def extract_last_number(line):
-    numbers = re.findall(r"\d*\.?\d+", line)
-    if numbers:
-        return float(numbers[-1])
-    return None
+def is_number(text):
+    return re.fullmatch(r"\d+(\.\d+)?", text) is not None
 
 
-def extract_ratio_after_colon(line, label):
-    if label.lower() in line.lower() and ":" in line:
-        after_colon = line.split(":")[-1]
-        numbers = re.findall(r"\d*\.?\d+", after_colon)
-        if numbers:
-            return float(numbers[-1])
-    return None
+def group_words_by_row(words, tolerance=3):
+    rows = defaultdict(list)
+    for w in words:
+        y = round(w["top"] / tolerance) * tolerance
+        rows[y].append(w)
+    return rows.values()
 
 
-def extract_bp_from_line(line):
-    """
-    Only extract BP if line clearly refers to blood pressure.
-    Prevents matching 30/15 HRV ratios.
-    """
-    lower = line.lower()
+def detect_numeric_column(words):
+    numeric_x = []
 
-    if not any(keyword in lower for keyword in ["blood", "pressure", "bp", "systolic"]):
-        return None, None
+    for w in words:
+        if is_number(w["text"]):
+            numeric_x.append(w["x0"])
 
-    match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
+    if not numeric_x:
+        return None
 
-    if match:
-        return float(match.group(1)), float(match.group(2))
+    # cluster via median band detection
+    center = median(numeric_x)
 
-    return None, None
+    # determine band (±40px safe window)
+    return (center - 40, center + 40)
+
+
+def detect_label_column(words):
+    text_x = []
+
+    for w in words:
+        if not is_number(w["text"]):
+            text_x.append(w["x0"])
+
+    if not text_x:
+        return None
+
+    center = median(text_x)
+    return (center - 80, center + 80)
+
+
+def extract_bp_from_text(full_text):
+    systolic = None
+    diastolic = None
+
+    lines = full_text.split("\n")
+
+    for line in lines:
+        lower = line.lower()
+        if any(k in lower for k in ["blood", "pressure", "bp", "systolic"]):
+            match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
+            if match:
+                systolic = float(match.group(1))
+                diastolic = float(match.group(2))
+
+    return systolic, diastolic
+
+
+def extract_hrv(full_text):
+    result = {}
+
+    lines = full_text.split("\n")
+
+    for line in lines:
+        if "30/15" in line and ":" in line:
+            numbers = re.findall(r"\d+(\.\d+)?", line)
+            if numbers:
+                result["k30_15_ratio"] = float(numbers[-1])
+
+        if "Valsalva" in line and ":" in line:
+            numbers = re.findall(r"\d+(\.\d+)?", line)
+            if numbers:
+                result["valsava_ratio"] = float(numbers[-1])
+
+    return result
 
 
 # =========================================================
-# CORE EXTRACTION ENGINE
+# CORE ENGINE
 # =========================================================
 
 def process_pdf(filepath):
@@ -77,81 +124,77 @@ def process_pdf(filepath):
         "vitals": {}
     }
 
+    all_words = []
+    full_text = ""
+
     with pdfplumber.open(filepath) as pdf:
-        lines = []
         for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                lines.extend(text.split("\n"))
+            full_text += page.extract_text() or ""
+            all_words.extend(page.extract_words())
 
-    for line in lines:
+    if not all_words:
+        return result
 
-        clean = line.strip()
+    value_band = detect_numeric_column(all_words)
+    label_band = detect_label_column(all_words)
 
-        # =================================================
-        # BODY COMPOSITION (TABLE SAFE)
-        # =================================================
+    if not value_band or not label_band:
+        return result
 
-        if "Weight" in clean and "Target" not in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["body_composition"]["weight_lb"] = value
+    rows = group_words_by_row(all_words)
 
-        if "Fat Free Mass" in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["body_composition"]["fat_free_mass_lb"] = value
+    for row in rows:
 
-        if "Dry Lean Mass" in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["body_composition"]["dry_lean_mass_lb"] = value
+        label_parts = []
+        value = None
 
-        if "Body Fat Mass" in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["body_composition"]["body_fat_mass_lb"] = value
+        for w in row:
+            x = w["x0"]
+            text = w["text"]
 
-        if "Total Body Water" in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["body_composition"]["total_body_water_lb"] = value
+            if label_band[0] <= x <= label_band[1] and not is_number(text):
+                label_parts.append(text)
 
-        # =================================================
-        # HRV
-        # =================================================
+            if value_band[0] <= x <= value_band[1] and is_number(text):
+                value = float(text)
 
-        k_ratio = extract_ratio_after_colon(clean, "30/15")
-        if k_ratio:
-            result["hrv"]["k30_15_ratio"] = k_ratio
+        if not label_parts or value is None:
+            continue
 
-        valsalva = extract_ratio_after_colon(clean, "Valsalva")
-        if valsalva:
-            result["hrv"]["valsava_ratio"] = valsalva
+        label = " ".join(label_parts)
 
-        # =================================================
-        # METABOLIC
-        # =================================================
+        # BODY COMPOSITION
+        if "Weight" in label and "Target" not in label:
+            result["body_composition"]["weight_lb"] = value
 
-        if "Daily Energy Expenditure" in clean and ":" in clean:
-            value = extract_last_number(clean)
-            if value:
-                result["metabolic"]["daily_energy_expenditure_kcal"] = value
+        elif "Fat Free Mass" in label:
+            result["body_composition"]["fat_free_mass_lb"] = value
 
-        # =================================================
-        # VITALS (BP SAFE)
-        # =================================================
+        elif "Body Fat Mass" in label:
+            result["body_composition"]["body_fat_mass_lb"] = value
 
-        systolic, diastolic = extract_bp_from_line(clean)
-        if systolic and diastolic:
-            result["vitals"]["systolic_bp"] = systolic
-            result["vitals"]["diastolic_bp"] = diastolic
+        elif "Dry Lean Mass" in label:
+            result["body_composition"]["dry_lean_mass_lb"] = value
+
+        elif "Total Body Water" in label:
+            result["body_composition"]["total_body_water_lb"] = value
+
+        elif "Daily Energy Expenditure" in label:
+            result["metabolic"]["daily_energy_expenditure_kcal"] = value
+
+    # Separate extraction (never table-based)
+    systolic, diastolic = extract_bp_from_text(full_text)
+    if systolic and diastolic:
+        result["vitals"]["systolic_bp"] = systolic
+        result["vitals"]["diastolic_bp"] = diastolic
+
+    result["hrv"] = extract_hrv(full_text)
 
     return result
 
 
 # =========================================================
-# EXTRACTION ENDPOINT
+# ENDPOINT
 # =========================================================
 
 @app.route("/v1/extract-report", methods=["POST"])
@@ -159,31 +202,25 @@ def extract_report():
 
     try:
 
-        # AUTH
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {API_KEY}":
             return jsonify({"error": "Unauthorized"}), 401
 
-        # FILE CHECK
         if "file" not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files["file"]
-
         if file.filename == "":
             return jsonify({"error": "Empty filename"}), 400
 
         secure_name = secure_filename(file.filename)
 
-        # TEMP SAVE
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             file.save(tmp.name)
             tmp_path = tmp.name
 
-        # PROCESS
         result = process_pdf(tmp_path)
 
-        # CLEANUP
         os.remove(tmp_path)
 
         return jsonify(result), 200
