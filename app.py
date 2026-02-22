@@ -7,17 +7,17 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "ithrive_secure_2026_key")
 
-# ------------------------------------------------------------
+# ============================================================
 # AUTH
-# ------------------------------------------------------------
+# ============================================================
 
 def require_auth(req):
     auth = req.headers.get("Authorization", "")
     return auth == f"Bearer {API_KEY}"
 
-# ------------------------------------------------------------
+# ============================================================
 # TEXT EXTRACTION
-# ------------------------------------------------------------
+# ============================================================
 
 def extract_full_text(file_stream):
     text = ""
@@ -28,15 +28,16 @@ def extract_full_text(file_stream):
                 text += "\n" + page_text
     return text
 
-# ------------------------------------------------------------
-# BODY COMPOSITION DEBUG (CORRECT PAGE MATCH)
-# ------------------------------------------------------------
+# ============================================================
+# BODY COMPOSITION DEBUG
+# ============================================================
 
 def debug_body_composition(file_stream):
     with pdfplumber.open(file_stream) as pdf:
         for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
 
+            # Match actual text in your PDF
             if text and "Body composition and follow up" in text:
 
                 print("\n==============================")
@@ -55,11 +56,9 @@ def debug_body_composition(file_stream):
                 print("\n==============================\n")
                 break
 
-    return None
-
-# ------------------------------------------------------------
-# HRV
-# ------------------------------------------------------------
+# ============================================================
+# HRV EXTRACTION
+# ============================================================
 
 def extract_hrv(text):
     k30 = re.search(r"K30/15[\s\S]*?Value:\s*([0-9\.]+)", text)
@@ -70,9 +69,9 @@ def extract_hrv(text):
         "valsava_ratio": float(valsalva.group(1)) if valsalva else None
     }
 
-# ------------------------------------------------------------
-# VITALS
-# ------------------------------------------------------------
+# ============================================================
+# VITALS EXTRACTION
+# ============================================================
 
 def extract_vitals(text):
     match = re.search(
@@ -91,9 +90,9 @@ def extract_vitals(text):
         "diastolic_bp": None
     }
 
-# ------------------------------------------------------------
-# METABOLIC
-# ------------------------------------------------------------
+# ============================================================
+# METABOLIC EXTRACTION
+# ============================================================
 
 def extract_metabolic(text):
     match = re.search(
@@ -110,13 +109,19 @@ def extract_metabolic(text):
         "daily_energy_expenditure_kcal": None
     }
 
-# ------------------------------------------------------------
-# ROUTES
-# ------------------------------------------------------------
+# ============================================================
+# ROOT ROUTE (VERSION VERIFICATION)
+# ============================================================
 
 @app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "extract_report_service_running"})
+def root():
+    return jsonify({
+        "status": "BODY_DEBUG_VERSION_ACTIVE"
+    })
+
+# ============================================================
+# EXTRACT REPORT
+# ============================================================
 
 @app.route("/v1/extract-report", methods=["POST"])
 def extract_report():
@@ -132,10 +137,10 @@ def extract_report():
     # Extract text
     text = extract_full_text(file.stream)
 
-    # Reset stream
+    # Reset stream for debug
     file.stream.seek(0)
 
-    # DEBUG BODY PAGE
+    # Debug body composition page
     debug_body_composition(file.stream)
 
     return jsonify({
@@ -144,6 +149,10 @@ def extract_report():
         "metabolic": extract_metabolic(text),
         "body_composition": None
     })
+
+# ============================================================
+# ENTRYPOINT
+# ============================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
