@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
-BODY_PAGE_INDEX = 6  # locked page
+BODY_PAGE_INDEX = 6  # locked body composition page
 
 
 def safe_float(val):
@@ -24,12 +24,12 @@ def safe_float(val):
 # ---------------------------------------------------
 def preprocess_image(image: Image.Image) -> Image.Image:
     gray = image.convert("L")
-    binary = gray.point(lambda x: 255 if x > 165 else 0, mode="1")
+    binary = gray.point(lambda x: 255 if x > 170 else 0, mode="1")
     return binary
 
 
 # ---------------------------------------------------
-# CROPPED OCR EXTRACTION
+# CROPPED OCR BODY EXTRACTION (RIGHT COLUMN ONLY)
 # ---------------------------------------------------
 def extract_body_cropped(pdf_bytes):
     body = {}
@@ -46,13 +46,12 @@ def extract_body_cropped(pdf_bytes):
             return body
 
         image = images[0]
-
         width, height = image.size
 
-        # Crop upper-right quadrant (summary metrics area)
+        # Crop far-right value column only (removes reference ranges)
         cropped = image.crop((
-            width * 0.45,   # left
-            height * 0.05,  # top
+            width * 0.70,   # left (shifted right)
+            height * 0.08,  # top
             width * 0.95,   # right
             height * 0.45   # bottom
         ))
@@ -67,8 +66,10 @@ def extract_body_cropped(pdf_bytes):
         numbers = [safe_float(n) for n in numbers]
         numbers = [n for n in numbers if n is not None]
 
-        # Expecting 3 primary values in order:
-        # Total Body Water, Fat Free Mass, Weight
+        # Expected order in right column (top to bottom):
+        # Total Body Water
+        # Fat Free Mass
+        # Weight
         if len(numbers) >= 3:
             body["total_body_water_lb"] = numbers[0]
             body["fat_free_mass_lb"] = numbers[1]
@@ -81,7 +82,7 @@ def extract_body_cropped(pdf_bytes):
 
 
 # ---------------------------------------------------
-# MAIN EXTRACTION
+# MAIN REPORT EXTRACTION
 # ---------------------------------------------------
 def extract_report(pdf_bytes):
     result = {
@@ -128,7 +129,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "CROPPED_OCR_FINAL_ACTIVE"})
+    return jsonify({"status": "CROPPED_RIGHT_COLUMN_LOCKED"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
