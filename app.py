@@ -1,15 +1,12 @@
 import io
 import re
 import pdfplumber
-import pytesseract
-from pdf2image import convert_from_bytes
-from PIL import Image
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
-BODY_PAGE_INDEX = 6  # locked body composition page
+BODY_PAGE_INDEX = 6  # locked
 
 
 def safe_float(val):
@@ -20,53 +17,38 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# IMAGE PREPROCESSING
+# VECTOR POSITION EXTRACTION (NO OCR)
 # ---------------------------------------------------
-def preprocess_image(image: Image.Image) -> Image.Image:
-    gray = image.convert("L")
-    binary = gray.point(lambda x: 255 if x > 170 else 0, mode="1")
-    return binary
-
-
-# ---------------------------------------------------
-# CROPPED OCR BODY EXTRACTION (RIGHT COLUMN ONLY)
-# ---------------------------------------------------
-def extract_body_cropped(pdf_bytes):
+def extract_body_vector(pdf_bytes):
     body = {}
 
-    try:
-        images = convert_from_bytes(
-            pdf_bytes,
-            dpi=300,
-            first_page=BODY_PAGE_INDEX + 1,
-            last_page=BODY_PAGE_INDEX + 1
-        )
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        page = pdf.pages[BODY_PAGE_INDEX]
 
-        if not images:
+        words = page.extract_words()
+
+        if not words:
             return body
 
-        image = images[0]
-        width, height = image.size
+        # Determine page width
+        page_width = page.width
 
-        # Crop far-right value column only (removes reference ranges)
-        cropped = image.crop((
-            width * 0.70,   # left (shifted right)
-            height * 0.08,  # top
-            width * 0.95,   # right
-            height * 0.45   # bottom
-        ))
+        # Keep only words in far-right 30% of page
+        right_words = [
+            w for w in words
+            if w["x0"] > page_width * 0.70
+        ]
 
-        processed = preprocess_image(cropped)
+        # Extract numeric tokens only
+        numbers = []
+        for w in right_words:
+            if re.fullmatch(r"\d+\.\d+|\d+", w["text"]):
+                numbers.append(safe_float(w["text"]))
 
-        config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.'
-
-        text = pytesseract.image_to_string(processed, config=config)
-
-        numbers = re.findall(r'\d+\.\d+|\d+', text)
-        numbers = [safe_float(n) for n in numbers]
+        # Remove None
         numbers = [n for n in numbers if n is not None]
 
-        # Expected order in right column (top to bottom):
+        # Expected vertical order
         # Total Body Water
         # Fat Free Mass
         # Weight
@@ -75,14 +57,11 @@ def extract_body_cropped(pdf_bytes):
             body["fat_free_mass_lb"] = numbers[1]
             body["weight_lb"] = numbers[2]
 
-    except Exception as e:
-        print("CROPPED OCR ERROR:", e)
-
     return body
 
 
 # ---------------------------------------------------
-# MAIN REPORT EXTRACTION
+# MAIN EXTRACTION
 # ---------------------------------------------------
 def extract_report(pdf_bytes):
     result = {
@@ -92,44 +71,40 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    result["body_composition"] = extract_body_cropped(pdf_bytes)
+    result["body_composition"] = extract_body_vector(pdf_bytes)
 
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text:
-                    continue
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if not text:
+                continue
 
-                k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-                if k_match:
-                    result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
+            k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+            if k_match:
+                result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
 
-                v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-                if v_match:
-                    result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
+            v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
+            if v_match:
+                result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
 
-                dee_match = re.search(r"Daily Energy Expenditure[^0-9]*([0-9]+)", text)
-                if dee_match:
-                    result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
+            dee_match = re.search(r"Daily Energy Expenditure[^0-9]*([0-9]+)", text)
+            if dee_match:
+                result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
 
-                bp_match = re.search(
-                    r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
-                    text
-                )
-                if bp_match:
-                    result["vitals"]["systolic_bp"] = safe_float(bp_match.group(1))
-                    result["vitals"]["diastolic_bp"] = safe_float(bp_match.group(2))
-
-    except Exception as e:
-        print("TEXT EXTRACTION ERROR:", e)
+            bp_match = re.search(
+                r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
+                text
+            )
+            if bp_match:
+                result["vitals"]["systolic_bp"] = safe_float(bp_match.group(1))
+                result["vitals"]["diastolic_bp"] = safe_float(bp_match.group(2))
 
     return result
 
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "CROPPED_RIGHT_COLUMN_LOCKED"})
+    return jsonify({"status": "VECTOR_POSITION_LOCKED"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
