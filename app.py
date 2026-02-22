@@ -6,43 +6,8 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
-BODY_PAGE_INDEX = 6
 
 
-def safe_float(val):
-    try:
-        return float(val)
-    except:
-        return None
-
-
-# ---------------------------------------------------
-# DIAGNOSTIC BODY EXTRACTION
-# ---------------------------------------------------
-def extract_body_vector(pdf_bytes):
-    body = {}
-
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        page = pdf.pages[BODY_PAGE_INDEX]
-        words = page.extract_words()
-
-        print("\n===== PAGE 6 WORD DUMP =====")
-        for w in words:
-            print({
-                "text": w["text"],
-                "x0": w["x0"],
-                "x1": w["x1"],
-                "top": w["top"],
-                "bottom": w["bottom"]
-            })
-        print("===== END DUMP =====\n")
-
-    return body
-
-
-# ---------------------------------------------------
-# MAIN EXTRACTION
-# ---------------------------------------------------
 def extract_report(pdf_bytes):
     result = {
         "body_composition": {},
@@ -51,40 +16,60 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    result["body_composition"] = extract_body_vector(pdf_bytes)
-
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
+        for page_index, page in enumerate(pdf.pages):
+
             text = page.extract_text()
+            words = page.extract_words()
+
             if not text:
                 continue
 
+            # ==========================================================
+            # PAGE 6 NUMERIC DIAGNOSTIC
+            # ==========================================================
+            if page_index == 6:
+                print("\n===== PAGE 6 NUMERIC WORDS =====")
+                for w in words:
+                    if re.match(r"^[0-9]+\.?[0-9]*$", w["text"]):
+                        print(w)
+                print("===== END NUMERIC DUMP =====\n")
+
+            # ==========================================================
+            # HRV
+            # ==========================================================
             k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
             if k_match:
-                result["hrv"]["k30_15_ratio"] = safe_float(k_match.group(1))
+                result["hrv"]["k30_15_ratio"] = float(k_match.group(1))
 
             v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
             if v_match:
-                result["hrv"]["valsava_ratio"] = safe_float(v_match.group(1))
+                result["hrv"]["valsava_ratio"] = float(v_match.group(1))
 
-            dee_match = re.search(r"Daily Energy Expenditure[^0-9]*([0-9]+)", text)
+            # ==========================================================
+            # Daily Energy Expenditure
+            # ==========================================================
+            dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)\s*Kcal", text)
             if dee_match:
-                result["metabolic"]["daily_energy_expenditure_kcal"] = safe_float(dee_match.group(1))
+                result["metabolic"]["daily_energy_expenditure_kcal"] = float(dee_match.group(1))
 
+            # ==========================================================
+            # Blood Pressure
+            # ==========================================================
             bp_match = re.search(
                 r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
                 text
             )
             if bp_match:
-                result["vitals"]["systolic_bp"] = safe_float(bp_match.group(1))
-                result["vitals"]["diastolic_bp"] = safe_float(bp_match.group(2))
+                result["vitals"]["systolic_bp"] = float(bp_match.group(1))
+                result["vitals"]["diastolic_bp"] = float(bp_match.group(2))
 
     return result
 
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "PAGE6_WORD_DIAGNOSTIC_ACTIVE"})
+    return jsonify({"status": "PAGE6_NUMERIC_DIAGNOSTIC_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
