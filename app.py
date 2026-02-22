@@ -9,6 +9,9 @@ app = Flask(__name__)
 
 AUTH_TOKEN = "ithrive_secure_2026_key"
 
+# HARD LOCKED BODY PAGE (0-based index 6 = page 7)
+BODY_PAGE_INDEX = 6
+
 
 def safe_float(val):
     try:
@@ -18,29 +21,15 @@ def safe_float(val):
 
 
 # ---------------------------------------------------
-# OCR BODY PAGE (Auto-detect correct page)
+# OCR BODY PAGE (Deterministic + Stable)
 # ---------------------------------------------------
 def ocr_body_page(pdf_bytes):
     try:
-        # First detect which page contains body composition
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            body_page_index = None
-
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text and "Body Composition" in text:
-                    body_page_index = i
-                    break
-
-        if body_page_index is None:
-            return {}
-
-        # OCR only that specific page
         images = convert_from_bytes(
             pdf_bytes,
             dpi=150,
-            first_page=body_page_index + 1,
-            last_page=body_page_index + 1
+            first_page=BODY_PAGE_INDEX + 1,
+            last_page=BODY_PAGE_INDEX + 1
         )
 
         for image in images:
@@ -80,10 +69,8 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    # OCR body
     result["body_composition"] = ocr_body_page(pdf_bytes)
 
-    # Text extraction for other values
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
@@ -119,7 +106,7 @@ def extract_report(pdf_bytes):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "FINAL_DYNAMIC_OCR_VERSION_ACTIVE"})
+    return jsonify({"status": "LOCKED_BODY_PAGE_VERSION_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
