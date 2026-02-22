@@ -17,24 +17,6 @@ def require_auth(req):
 
 
 # ------------------------------------------------------------
-# HELPERS
-# ------------------------------------------------------------
-
-def to_float(val):
-    try:
-        return float(str(val).replace("%", "").strip())
-    except:
-        return None
-
-
-def extract_percent(text):
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)
-    if match:
-        return float(match.group(1))
-    return None
-
-
-# ------------------------------------------------------------
 # TEXT EXTRACTION
 # ------------------------------------------------------------
 
@@ -49,88 +31,36 @@ def extract_full_text(file_stream):
 
 
 # ------------------------------------------------------------
-# STRICT BODY COMPOSITION PARSER (PAGE 7 FIXED FORMAT)
+# BODY COMPOSITION DEBUG (PRINT RAW TABLE STRUCTURE)
 # ------------------------------------------------------------
 
-def extract_body_composition(file_stream):
-    result = {
-        "intra_cellular_water_lb": None,
-        "extra_cellular_water_lb": None,
-        "dry_lean_mass_lb": None,
-        "body_fat_mass_lb": None,
-        "total_body_water_lb": None,
-        "fat_free_mass_lb": None,
-        "weight_lb": None,
-        "fat_free_mass_percent": None,
-        "body_fat_percent": None,
-        "total_body_water_percent": None,
-        "intra_cellular_water_percent": None,
-        "extra_cellular_water_percent": None,
-        "bmi": None,
-        "basal_metabolic_rate_kcal": None
-    }
-
+def debug_body_composition(file_stream):
     with pdfplumber.open(file_stream) as pdf:
-        for page in pdf.pages:
+        for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
-            if not text:
-                continue
+            if text and "Body Composition Indicators" in text:
 
-            if "Body Composition Indicators (lb)" in text:
+                print("\n==============================")
+                print("BODY COMPOSITION PAGE FOUND")
+                print("Page index:", page_index)
+                print("==============================\n")
 
                 tables = page.extract_tables()
+                print("TABLE COUNT:", len(tables))
 
-                for table in tables:
+                for t_index, table in enumerate(tables):
+                    print("\n--- TABLE", t_index, "---")
                     for row in table:
-                        if not row:
-                            continue
+                        print(row)
 
-                        row_label = str(row[0]).strip()
+                print("\n==============================\n")
+                break
 
-                        # ----- MAIN LB TABLE -----
-                        if row_label == "Intra Cellular Water":
-                            result["intra_cellular_water_lb"] = to_float(row[1])
-                        if row_label == "Extra Cellular Water":
-                            result["extra_cellular_water_lb"] = to_float(row[1])
-                        if row_label == "Dry Lean Mass":
-                            result["dry_lean_mass_lb"] = to_float(row[1])
-                        if row_label == "Body Fat Mass":
-                            result["body_fat_mass_lb"] = to_float(row[1])
-
-                        # These are in wider row format
-                        if row_label == "Total Body Water":
-                            result["total_body_water_lb"] = to_float(row[2])
-                        if row_label == "Fat Free Mass":
-                            result["fat_free_mass_lb"] = to_float(row[3])
-                        if row_label == "Weight":
-                            result["weight_lb"] = to_float(row[4])
-
-                        # ----- PERCENT ANALYSIS TABLE -----
-                        if row_label == "Fat Free Mass" and "%" in str(row):
-                            result["fat_free_mass_percent"] = extract_percent(str(row))
-                        if row_label == "Body Fat Mass" and "%" in str(row):
-                            result["body_fat_percent"] = extract_percent(str(row))
-                        if row_label == "Total Body Water" and "%" in str(row):
-                            result["total_body_water_percent"] = extract_percent(str(row))
-                        if row_label == "Intra Cellular Water" and "%" in str(row):
-                            result["intra_cellular_water_percent"] = extract_percent(str(row))
-                        if row_label == "Extra Cellular Water" and "%" in str(row):
-                            result["extra_cellular_water_percent"] = extract_percent(str(row))
-
-                        # ----- BMI / BMR -----
-                        if "Body Mass Index" in row_label:
-                            result["bmi"] = to_float(row[1])
-
-                        if "Basal Metabolic Rate" in row_label:
-                            result["basal_metabolic_rate_kcal"] = to_float(row[1])
-
-                break  # stop after page found
-
-    return result
+    return {}
 
 
 # ------------------------------------------------------------
-# HRV + VITALS + METABOLIC
+# HRV
 # ------------------------------------------------------------
 
 def extract_hrv(text):
@@ -143,21 +73,44 @@ def extract_hrv(text):
     }
 
 
+# ------------------------------------------------------------
+# VITALS
+# ------------------------------------------------------------
+
 def extract_vitals(text):
-    match = re.search(r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)", text)
+    match = re.search(
+        r"Systolic\s*/\s*Diastolic pressure:\s*([0-9]+)\s*/\s*([0-9]+)",
+        text
+    )
     if match:
         return {
             "systolic_bp": float(match.group(1)),
             "diastolic_bp": float(match.group(2))
         }
-    return {"systolic_bp": None, "diastolic_bp": None}
 
+    return {
+        "systolic_bp": None,
+        "diastolic_bp": None
+    }
+
+
+# ------------------------------------------------------------
+# METABOLIC
+# ------------------------------------------------------------
 
 def extract_metabolic(text):
-    match = re.search(r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)", text)
+    match = re.search(
+        r"Daily Energy Expenditure \(DEE\):\s*([0-9\.]+)",
+        text
+    )
     if match:
-        return {"daily_energy_expenditure_kcal": float(match.group(1))}
-    return {"daily_energy_expenditure_kcal": None}
+        return {
+            "daily_energy_expenditure_kcal": float(match.group(1))
+        }
+
+    return {
+        "daily_energy_expenditure_kcal": None
+    }
 
 
 # ------------------------------------------------------------
@@ -166,11 +119,14 @@ def extract_metabolic(text):
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "extract_report_service_running"})
+    return jsonify({
+        "status": "extract_report_service_running"
+    })
 
 
 @app.route("/v1/extract-report", methods=["POST"])
 def extract_report():
+
     if not require_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -179,16 +135,20 @@ def extract_report():
 
     file = request.files["file"]
 
+    # Extract text
     text = extract_full_text(file.stream)
 
+    # Reset stream for debug table parsing
     file.stream.seek(0)
-    body = extract_body_composition(file.stream)
+
+    # DEBUG BODY COMPOSITION TABLE STRUCTURE
+    debug_body_composition(file.stream)
 
     return jsonify({
         "vitals": extract_vitals(text),
         "hrv": extract_hrv(text),
         "metabolic": extract_metabolic(text),
-        "body_composition": body
+        "body_composition": None
     })
 
 
