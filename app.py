@@ -1,169 +1,124 @@
-import re
-import fitz
 from flask import Flask, request, jsonify
+import fitz  # PyMuPDF
+import re
+import os
 
-API_KEY = "ithrive_secure_2026_key"
 app = Flask(__name__)
 
-
-def is_authorized(req):
-    auth = req.headers.get("Authorization", "")
-    return auth == f"Bearer {API_KEY}"
+API_KEY = os.environ.get("PREPROCESS_API_KEY", "ithrive_secure_2026_key")
 
 
-def clean_number(value):
-    if not value:
-        return None
-    value = value.replace(",", ".")
-    try:
-        return float(value)
-    except:
-        return None
+def require_auth():
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header.split(" ")[1]
+    return token == API_KEY
 
 
-def extract_value_after_label(text, label):
-    pattern = rf"{label}[\s\S]*?Value:\s*(\d+\.?\d*)"
+def extract_text_from_pdf(file_storage):
+    doc = fitz.open(stream=file_storage.read(), filetype="pdf")
+    full_text = ""
+    for page in doc:
+        full_text += page.get_text()
+    return full_text
+
+
+def parse_float(pattern, text):
     match = re.search(pattern, text, re.IGNORECASE)
-    return clean_number(match.group(1)) if match else None
+    if match:
+        try:
+            return float(match.group(1))
+        except:
+            return None
+    return None
 
 
-@app.route("/v1/extract-report", methods=["POST"])
-def extract_report():
+def parse_string(pattern, text):
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
 
-    if not is_authorized(request):
+
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "extract_report_service_running"})
+
+
+@app.route("/extract-hrv", methods=["POST"])
+def extract_hrv():
+    if not require_auth():
         return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "file_missing"}), 400
 
-    try:
-        file = request.files["file"]
-        pdf_bytes = file.read()
+    file = request.files["file"]
+    text = extract_text_from_pdf(file)
 
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text = ""
+    result = {
+        "k30_15_ratio": parse_float(r"K30\/15.*?Value:\s*([0-9.]+)", text),
+        "valsava_ratio": parse_float(r"Valsalva ratio.*?Value:\s*([0-9.]+)", text),
+        "systolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*([0-9.]+)", text),
+        "diastolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*[0-9.]+\s*\/\s*([0-9.]+)", text),
+        "daily_energy_expenditure_kcal": parse_float(r"Daily Energy Expenditure.*?:\s*([0-9.]+)", text),
+    }
 
-        for page in doc:
-            text += page.get_text()
+    if all(value is None for value in result.values()):
+        return jsonify({"error": "hrv_not_detected"}), 422
 
-        doc.close()
-
-        # -----------------------------
-        # PATIENT
-        # -----------------------------
-
-        name_match = re.search(r"First/Last Name:\s*(.+)", text)
-        name = name_match.group(1).strip() if name_match else None
-
-        first_name = None
-        last_name = None
-        if name:
-            parts = name.split(" ")
-            first_name = parts[0]
-            last_name = " ".join(parts[1:]) if len(parts) > 1 else None
-
-        dob_match = re.search(r"Date of birth:\s*(.+)", text)
-        dob = dob_match.group(1).strip() if dob_match else None
-
-        gender_match = re.search(r"Gender:\s*(Male|Female)", text, re.IGNORECASE)
-        gender = gender_match.group(1) if gender_match else None
-
-        exam_match = re.search(r"Examination performed at:\s*(.+)", text)
-        exam_date = exam_match.group(1).strip() if exam_match else None
-
-        # -----------------------------
-        # VITALS
-        # -----------------------------
-
-        bp_match = re.search(
-            r"Systolic\s*/\s*Diastolic pressure:\s*(\d+)\s*/\s*(\d+)",
-            text
-        )
-
-        systolic = clean_number(bp_match.group(1)) if bp_match else None
-        diastolic = clean_number(bp_match.group(2)) if bp_match else None
-
-        # -----------------------------
-        # HRV
-        # -----------------------------
-
-        k30_15 = extract_value_after_label(text, "K30/15")
-        valsalva = extract_value_after_label(text, "Valsalva ratio")
-
-        # -----------------------------
-        # METABOLIC
-        # -----------------------------
-
-        dee_match = re.search(
-            r"Daily Energy Expenditure \(DEE\):\s*(\d+)",
-            text
-        )
-        dee = clean_number(dee_match.group(1)) if dee_match else None
-
-        # -----------------------------
-        # BODY
-        # -----------------------------
-
-        weight_match = re.search(r"Weight\s*:\s*(\d+\.?\d*)", text)
-        weight = clean_number(weight_match.group(1)) if weight_match else None
-
-        height_match = re.search(r"Height:\s*(\d+)\s*Feet\s*(\d+)", text)
-        height_feet = clean_number(height_match.group(1)) if height_match else None
-        height_inches = clean_number(height_match.group(2)) if height_match else None
-
-        # -----------------------------
-        # STRICT FAIL CONDITION
-        # -----------------------------
-
-        core_all_null = (
-            k30_15 is None and
-            valsalva is None and
-            systolic is None and
-            diastolic is None and
-            dee is None
-        )
-
-        if core_all_null:
-            return jsonify({"error": "report_format_not_supported"}), 422
-
-        result = {
-            "patient": {
-                "first_name": first_name,
-                "last_name": last_name,
-                "dob": dob,
-                "gender": gender,
-                "exam_date": exam_date
-            },
-            "vitals": {
-                "systolic_bp": systolic,
-                "diastolic_bp": diastolic
-            },
-            "hrv": {
-                "k30_15_ratio": k30_15,
-                "valsava_ratio": valsalva
-            },
-            "metabolic": {
-                "daily_energy_expenditure_kcal": dee
-            },
-            "body": {
-                "weight_lbs": weight,
-                "height_feet": height_feet,
-                "height_inches": height_inches
-            }
-        }
-
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({
-            "error": "processing_failed",
-            "details": str(e)
-        }), 500
+    return jsonify(result)
 
 
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "v1_extract_report_service_running"})
+@app.route("/v1/extract-report", methods=["POST"])
+def extract_report():
+    if not require_auth():
+        return jsonify({"error": "unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "file_missing"}), 400
+
+    file = request.files["file"]
+    text = extract_text_from_pdf(file)
+
+    response = {
+        "patient": {
+            "first_name": parse_string(r"First\/Last Name:\s*([A-Za-z]+)", text),
+            "last_name": parse_string(r"First\/Last Name:\s*[A-Za-z]+\s+([A-Za-z]+)", text),
+            "dob": parse_string(r"Date of birth:\s*([0-9\-\/]+)", text),
+            "gender": parse_string(r"Gender:\s*(Male|Female)", text),
+            "exam_date": parse_string(r"Examination performed at:\s*([0-9\-\s:]+)", text),
+        },
+        "vitals": {
+            "systolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*([0-9.]+)", text),
+            "diastolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*[0-9.]+\s*\/\s*([0-9.]+)", text),
+        },
+        "hrv": {
+            "k30_15_ratio": parse_float(r"K30\/15.*?Value:\s*([0-9.]+)", text),
+            "valsava_ratio": parse_float(r"Valsalva ratio.*?Value:\s*([0-9.]+)", text),
+        },
+        "metabolic": {
+            "daily_energy_expenditure_kcal": parse_float(r"Daily Energy Expenditure.*?:\s*([0-9.]+)", text),
+        },
+        "body": {
+            "weight_lbs": parse_float(r"Weight\s*:\s*([0-9.]+)", text),
+            "height_feet": parse_float(r"Height:\s*([0-9.]+)\s*Feet", text),
+            "height_inches": parse_float(r"Height:\s*[0-9.]+\s*Feet\s*([0-9.]+)\s*Inch", text),
+        },
+    }
+
+    # strict validation
+    flat_values = []
+
+    for section in response.values():
+        for value in section.values():
+            flat_values.append(value)
+
+    if all(value is None for value in flat_values):
+        return jsonify({"error": "Report format not supported"}), 422
+
+    return jsonify(response)
 
 
 if __name__ == "__main__":
