@@ -23,7 +23,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "FINAL_TABLE_LOCKED_PRODUCTION_ACTIVE"}), 200
+    return jsonify({"status": "FINAL_PRODUCTION_LOCKED_ACTIVE"}), 200
 
 
 # =========================================================
@@ -47,9 +47,20 @@ def extract_ratio_after_colon(line, label):
 
 
 def extract_bp_from_line(line):
+    """
+    Only extract BP if line clearly refers to blood pressure.
+    Prevents matching 30/15 HRV ratios.
+    """
+    lower = line.lower()
+
+    if not any(keyword in lower for keyword in ["blood", "pressure", "bp", "systolic"]):
+        return None, None
+
     match = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", line)
+
     if match:
         return float(match.group(1)), float(match.group(2))
+
     return None, None
 
 
@@ -128,7 +139,7 @@ def process_pdf(filepath):
                 result["metabolic"]["daily_energy_expenditure_kcal"] = value
 
         # =================================================
-        # VITALS (BP)
+        # VITALS (BP SAFE)
         # =================================================
 
         systolic, diastolic = extract_bp_from_line(clean)
@@ -148,16 +159,12 @@ def extract_report():
 
     try:
 
-        # -------------------------
         # AUTH
-        # -------------------------
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {API_KEY}":
             return jsonify({"error": "Unauthorized"}), 401
 
-        # -------------------------
-        # FILE VALIDATION
-        # -------------------------
+        # FILE CHECK
         if "file" not in request.files:
             return jsonify({"error": "No file uploaded"}), 400
 
@@ -166,23 +173,17 @@ def extract_report():
         if file.filename == "":
             return jsonify({"error": "Empty filename"}), 400
 
-        filename = secure_filename(file.filename)
+        secure_name = secure_filename(file.filename)
 
-        # -------------------------
         # TEMP SAVE
-        # -------------------------
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             file.save(tmp.name)
             tmp_path = tmp.name
 
-        # -------------------------
         # PROCESS
-        # -------------------------
         result = process_pdf(tmp_path)
 
-        # -------------------------
         # CLEANUP
-        # -------------------------
         os.remove(tmp_path)
 
         return jsonify(result), 200
