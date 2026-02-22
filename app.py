@@ -3,7 +3,6 @@ import re
 import tempfile
 import traceback
 from collections import defaultdict
-from statistics import median
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import pdfplumber
@@ -25,7 +24,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "LABEL_COUPLED_COLUMN_LOCKED_PRODUCTION_ACTIVE"}), 200
+    return jsonify({"status": "FINAL_SIMPLE_DETERMINISTIC_PRODUCTION_ACTIVE"}), 200
 
 
 # =========================================================
@@ -53,67 +52,28 @@ def group_words_by_row(words, tolerance=3):
     return list(rows.values())
 
 
-def row_contains_body_label(row_text):
-    return any(label in row_text for label in BODY_LABELS)
+def extract_row_value(row_words):
+    """
+    Extract the correct lb value from a row:
+    - collect all numeric values
+    - keep realistic lb values (20–400)
+    - return the largest realistic value
+    """
+    numbers = []
 
+    for w in row_words:
+        if is_number(w["text"]):
+            val = float(w["text"])
+            if 20 <= val <= 400:
+                numbers.append(val)
 
-def detect_label_band(rows):
-    label_x_positions = []
-
-    for row in rows:
-        text = " ".join(w["text"] for w in row)
-        if row_contains_body_label(text):
-            for w in row:
-                if not is_number(w["text"]):
-                    label_x_positions.append(w["x0"])
-
-    if not label_x_positions:
+    if not numbers:
         return None
 
-    center = median(label_x_positions)
-    return (center - 120, center + 120)
+    return max(numbers)
 
 
-def detect_value_band(rows, label_band):
-    candidate_x = []
-
-    for row in rows:
-        row_text = " ".join(w["text"] for w in row)
-        if not row_contains_body_label(row_text):
-            continue
-
-        for w in row:
-            if is_number(w["text"]):
-                candidate_x.append(w["x0"])
-
-    if not candidate_x:
-        return None
-
-    # cluster candidate X positions
-    clusters = []
-
-    for x in candidate_x:
-        placed = False
-        for cluster in clusters:
-            if abs(cluster["center"] - x) < 50:
-                cluster["values"].append(x)
-                cluster["center"] = median(cluster["values"])
-                placed = True
-                break
-        if not placed:
-            clusters.append({
-                "center": x,
-                "values": [x]
-            })
-
-    # choose cluster with highest density
-    best_cluster = max(clusters, key=lambda c: len(c["values"]))
-
-    center = best_cluster["center"]
-    return (center - 50, center + 50)
-
-
-def extract_bp_from_text(full_text):
+def extract_bp(full_text):
     systolic = None
     diastolic = None
 
@@ -130,15 +90,18 @@ def extract_bp_from_text(full_text):
 
 def extract_hrv(full_text):
     result = {}
+
     for line in full_text.split("\n"):
         if "30/15" in line and ":" in line:
             nums = re.findall(r"\d+(\.\d+)?", line)
             if nums:
                 result["k30_15_ratio"] = float(nums[-1])
+
         if "Valsalva" in line and ":" in line:
             nums = re.findall(r"\d+(\.\d+)?", line)
             if nums:
                 result["valsava_ratio"] = float(nums[-1])
+
     return result
 
 
@@ -158,7 +121,6 @@ def process_pdf(filepath):
     full_text = ""
 
     with pdfplumber.open(filepath) as pdf:
-
         for page in pdf.pages:
 
             page_text = page.extract_text() or ""
@@ -170,44 +132,38 @@ def process_pdf(filepath):
             words = page.extract_words()
             rows = group_words_by_row(words)
 
-            label_band = detect_label_band(rows)
-            value_band = detect_value_band(rows, label_band)
-
-            if not label_band or not value_band:
-                continue
-
             for row in rows:
 
-                label_parts = []
-                value = None
+                row_text = " ".join(w["text"] for w in row)
 
-                for w in row:
-                    x = w["x0"]
-                    text = w["text"]
-
-                    if label_band[0] <= x <= label_band[1] and not is_number(text):
-                        label_parts.append(text)
-
-                    if value_band[0] <= x <= value_band[1] and is_number(text):
-                        value = float(text)
-
-                if not label_parts or value is None:
+                if not any(label in row_text for label in BODY_LABELS):
                     continue
 
-                label = " ".join(label_parts)
+                value = extract_row_value(row)
 
-                if "Weight" in label and "Target" not in label:
+                if value is None:
+                    continue
+
+                if "Weight" in row_text and "Target" not in row_text:
                     result["body_composition"]["weight_lb"] = value
-                elif "Fat Free Mass" in label:
+
+                elif "Fat Free Mass" in row_text:
                     result["body_composition"]["fat_free_mass_lb"] = value
-                elif "Body Fat Mass" in label:
+
+                elif "Body Fat Mass" in row_text:
                     result["body_composition"]["body_fat_mass_lb"] = value
-                elif "Dry Lean Mass" in label:
+
+                elif "Dry Lean Mass" in row_text:
                     result["body_composition"]["dry_lean_mass_lb"] = value
-                elif "Total Body Water" in label:
+
+                elif "Total Body Water" in row_text:
                     result["body_composition"]["total_body_water_lb"] = value
 
-    systolic, diastolic = extract_bp_from_text(full_text)
+                elif "Daily Energy Expenditure" in row_text:
+                    result["metabolic"]["daily_energy_expenditure_kcal"] = value
+
+    # Extract BP + HRV separately
+    systolic, diastolic = extract_bp(full_text)
     if systolic and diastolic:
         result["vitals"]["systolic_bp"] = systolic
         result["vitals"]["diastolic_bp"] = diastolic
