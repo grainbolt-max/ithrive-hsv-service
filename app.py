@@ -1,16 +1,63 @@
-import io
+import os
 import re
+import tempfile
+import traceback
 from flask import Flask, request, jsonify
-from pdf2image import convert_from_bytes
-import pytesseract
-from PIL import Image
+from werkzeug.utils import secure_filename
+import pdfplumber
+
+# =========================================================
+# CONFIG
+# =========================================================
+
+API_KEY = "ithrive_secure_2026_key"
+MAX_FILE_SIZE_MB = 20
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
-AUTH_TOKEN = "ithrive_secure_2026_key"
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
+
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "FINAL_LOCKED_OCR_ACTIVE"}), 200
 
 
-def extract_report(pdf_bytes):
+# =========================================================
+# SAFE NUMERIC EXTRACTION
+# =========================================================
+
+def extract_numeric_after_label(text, label):
+    """
+    Finds first numeric value after a label.
+    Hard-stable deterministic extraction.
+    """
+    pattern = rf"{label}[^0-9\-\.]*([-+]?\d*\.?\d+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        try:
+            return float(match.group(1))
+        except:
+            return None
+    return None
+
+
+# =========================================================
+# CORE EXTRACTION ENGINE
+# =========================================================
+
+def process_pdf(filepath):
+    """
+    Deterministic extraction.
+    No printing.
+    No streaming.
+    No debug.
+    Always returns structured dict.
+    """
+
     result = {
         "body_composition": {},
         "hrv": {},
@@ -18,65 +65,129 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    # Convert ONLY Page 6 to image
-    pages = convert_from_bytes(pdf_bytes, dpi=300)
-    page6 = pages[6]
+    with pdfplumber.open(filepath) as pdf:
 
-    width, height = page6.size
+        full_text = ""
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                full_text += "\n" + text
 
-    # LOCKED CROP REGION (Right column where numeric values live)
-    crop_box = (
-        int(width * 0.55),   # left
-        int(height * 0.20),  # top
-        int(width * 0.95),   # right
-        int(height * 0.75)   # bottom
-    )
+    # -------------------------
+    # Body Composition
+    # -------------------------
 
-    cropped = page6.crop(crop_box)
+    weight = extract_numeric_after_label(full_text, "Weight")
+    fat_mass = extract_numeric_after_label(full_text, "Fat Mass")
+    fat_free_mass = extract_numeric_after_label(full_text, "Fat Free Mass")
+    tbw = extract_numeric_after_label(full_text, "Total Body Water")
 
-    # OCR
-    ocr_text = pytesseract.image_to_string(cropped)
+    if weight:
+        result["body_composition"]["weight_lb"] = weight
+    if fat_mass:
+        result["body_composition"]["fat_mass_lb"] = fat_mass
+    if fat_free_mass:
+        result["body_composition"]["fat_free_mass_lb"] = fat_free_mass
+    if tbw:
+        result["body_composition"]["total_body_water_lb"] = tbw
 
-    # Extract numeric tokens
-    numbers = re.findall(r"[0-9]+\.?[0-9]*", ocr_text)
+    # -------------------------
+    # HRV
+    # -------------------------
 
-    # Deterministic mapping by order (top-to-bottom appearance)
-    # Adjusted to known report structure
-    if len(numbers) >= 4:
-        result["body_composition"] = {
-            "weight_lb": float(numbers[0]),
-            "fat_free_mass_lb": float(numbers[1]),
-            "fat_mass_lb": float(numbers[2]),
-            "total_body_water_lb": float(numbers[3])
-        }
+    k_ratio = extract_numeric_after_label(full_text, "30/15")
+    valsalva = extract_numeric_after_label(full_text, "Valsalva")
+
+    if k_ratio:
+        result["hrv"]["k30_15_ratio"] = k_ratio
+    if valsalva:
+        result["hrv"]["valsava_ratio"] = valsalva
+
+    # -------------------------
+    # Metabolic
+    # -------------------------
+
+    daily_energy = extract_numeric_after_label(full_text, "Daily Energy Expenditure")
+
+    if daily_energy:
+        result["metabolic"]["daily_energy_expenditure_kcal"] = daily_energy
+
+    # -------------------------
+    # Vitals
+    # -------------------------
+
+    systolic = extract_numeric_after_label(full_text, "Systolic")
+    diastolic = extract_numeric_after_label(full_text, "Diastolic")
+
+    if systolic:
+        result["vitals"]["systolic_bp"] = systolic
+    if diastolic:
+        result["vitals"]["diastolic_bp"] = diastolic
 
     return result
 
 
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "FINAL_LOCKED_OCR_ACTIVE"})
-
+# =========================================================
+# EXTRACTION ENDPOINT
+# =========================================================
 
 @app.route("/v1/extract-report", methods=["POST"])
-def extract_report_endpoint():
-    auth_header = request.headers.get("Authorization")
-
-    if auth_header != f"Bearer {AUTH_TOKEN}":
-        return jsonify({"error": "Unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    file = request.files["file"]
-    pdf_bytes = file.read()
+def extract_report():
 
     try:
-        result = extract_report(pdf_bytes)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # -------------------------
+        # AUTH
+        # -------------------------
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {API_KEY}":
+            return jsonify({"error": "Unauthorized"}), 401
 
+        # -------------------------
+        # FILE VALIDATION
+        # -------------------------
+        if "file" not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+
+        file = request.files["file"]
+
+        if file.filename == "":
+            return jsonify({"error": "Empty filename"}), 400
+
+        filename = secure_filename(file.filename)
+
+        # -------------------------
+        # TEMP SAVE
+        # -------------------------
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+
+        # -------------------------
+        # PROCESS
+        # -------------------------
+        result = process_pdf(tmp_path)
+
+        # -------------------------
+        # CLEANUP
+        # -------------------------
+        os.remove(tmp_path)
+
+        # -------------------------
+        # RETURN JSON ONLY
+        # -------------------------
+        return jsonify(result), 200
+
+    except Exception as e:
+        # HARD FAIL SAFE
+        traceback.print_exc()
+        return jsonify({
+            "error": "Internal processing error"
+        }), 500
+
+
+# =========================================================
+# ENTRY
+# =========================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
