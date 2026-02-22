@@ -1,7 +1,9 @@
 import io
 import re
-import pdfplumber
 from flask import Flask, request, jsonify
+from pdf2image import convert_from_bytes
+import pytesseract
+from PIL import Image
 
 app = Flask(__name__)
 
@@ -16,60 +18,44 @@ def extract_report(pdf_bytes):
         "vitals": {}
     }
 
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page_index, page in enumerate(pdf.pages):
+    # Convert ONLY Page 6 to image
+    pages = convert_from_bytes(pdf_bytes, dpi=300)
+    page6 = pages[6]
 
-            text = page.extract_text()
-            words = page.extract_words()
+    width, height = page6.size
 
-            if not text:
-                continue
+    # LOCKED CROP REGION (Right column where numeric values live)
+    crop_box = (
+        int(width * 0.55),   # left
+        int(height * 0.20),  # top
+        int(width * 0.95),   # right
+        int(height * 0.75)   # bottom
+    )
 
-            # ==========================================================
-            # PAGE 6 NUMERIC DIAGNOSTIC
-            # ==========================================================
-            if page_index == 6:
-                print("\n===== PAGE 6 NUMERIC WORDS =====")
-                for w in words:
-                    if re.match(r"^[0-9]+\.?[0-9]*$", w["text"]):
-                        print(w)
-                print("===== END NUMERIC DUMP =====\n")
+    cropped = page6.crop(crop_box)
 
-            # ==========================================================
-            # HRV
-            # ==========================================================
-            k_match = re.search(r"K30\/15.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-            if k_match:
-                result["hrv"]["k30_15_ratio"] = float(k_match.group(1))
+    # OCR
+    ocr_text = pytesseract.image_to_string(cropped)
 
-            v_match = re.search(r"Valsalva.*?Value:\s*([0-9]+\.?[0-9]*)", text, re.DOTALL)
-            if v_match:
-                result["hrv"]["valsava_ratio"] = float(v_match.group(1))
+    # Extract numeric tokens
+    numbers = re.findall(r"[0-9]+\.?[0-9]*", ocr_text)
 
-            # ==========================================================
-            # Daily Energy Expenditure
-            # ==========================================================
-            dee_match = re.search(r"Daily Energy Expenditure.*?([0-9]+)\s*Kcal", text)
-            if dee_match:
-                result["metabolic"]["daily_energy_expenditure_kcal"] = float(dee_match.group(1))
-
-            # ==========================================================
-            # Blood Pressure
-            # ==========================================================
-            bp_match = re.search(
-                r"Systolic\s*\/\s*Diastolic\s*pressure:\s*([0-9]+)\s*\/\s*([0-9]+)",
-                text
-            )
-            if bp_match:
-                result["vitals"]["systolic_bp"] = float(bp_match.group(1))
-                result["vitals"]["diastolic_bp"] = float(bp_match.group(2))
+    # Deterministic mapping by order (top-to-bottom appearance)
+    # Adjusted to known report structure
+    if len(numbers) >= 4:
+        result["body_composition"] = {
+            "weight_lb": float(numbers[0]),
+            "fat_free_mass_lb": float(numbers[1]),
+            "fat_mass_lb": float(numbers[2]),
+            "total_body_water_lb": float(numbers[3])
+        }
 
     return result
 
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "PAGE6_NUMERIC_DIAGNOSTIC_ACTIVE"})
+    return jsonify({"status": "FINAL_LOCKED_OCR_ACTIVE"})
 
 
 @app.route("/v1/extract-report", methods=["POST"])
