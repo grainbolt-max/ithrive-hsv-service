@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
+import fitz
 import re
 import os
 
@@ -24,8 +24,8 @@ def extract_text_from_pdf(file_storage):
     return full_text
 
 
-def parse_float(pattern, text):
-    match = re.search(pattern, text, re.IGNORECASE)
+def parse_float(pattern, text, flags=0):
+    match = re.search(pattern, text, flags)
     if match:
         try:
             return float(match.group(1))
@@ -44,31 +44,6 @@ def parse_string(pattern, text):
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "extract_report_service_running"})
-
-
-@app.route("/extract-hrv", methods=["POST"])
-def extract_hrv():
-    if not require_auth():
-        return jsonify({"error": "unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "file_missing"}), 400
-
-    file = request.files["file"]
-    text = extract_text_from_pdf(file)
-
-    result = {
-        "k30_15_ratio": parse_float(r"K30\/15.*?Value:\s*([0-9.]+)", text),
-        "valsava_ratio": parse_float(r"Valsalva ratio.*?Value:\s*([0-9.]+)", text),
-        "systolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*([0-9.]+)", text),
-        "diastolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*[0-9.]+\s*\/\s*([0-9.]+)", text),
-        "daily_energy_expenditure_kcal": parse_float(r"Daily Energy Expenditure.*?:\s*([0-9.]+)", text),
-    }
-
-    if all(value is None for value in result.values()):
-        return jsonify({"error": "hrv_not_detected"}), 422
-
-    return jsonify(result)
 
 
 @app.route("/v1/extract-report", methods=["POST"])
@@ -95,22 +70,32 @@ def extract_report():
             "diastolic_bp": parse_float(r"Systolic\s*\/\s*Diastolic pressure:\s*[0-9.]+\s*\/\s*([0-9.]+)", text),
         },
         "hrv": {
-            "k30_15_ratio": parse_float(r"K30\/15.*?Value:\s*([0-9.]+)", text),
-            "valsava_ratio": parse_float(r"Valsalva ratio.*?Value:\s*([0-9.]+)", text),
+            "k30_15_ratio": parse_float(
+                r"K30\/15[\s\S]*?Value:\s*([0-9.]+)",
+                text,
+                re.IGNORECASE
+            ),
+            "valsava_ratio": parse_float(
+                r"Valsalva ratio[\s\S]*?Value:\s*([0-9.]+)",
+                text,
+                re.IGNORECASE
+            ),
         },
         "metabolic": {
-            "daily_energy_expenditure_kcal": parse_float(r"Daily Energy Expenditure.*?:\s*([0-9.]+)", text),
+            "daily_energy_expenditure_kcal": parse_float(
+                r"Daily Energy Expenditure.*?:\s*([0-9.]+)",
+                text,
+                re.IGNORECASE
+            ),
         },
         "body": {
-            "weight_lbs": parse_float(r"Weight\s*:\s*([0-9.]+)", text),
-            "height_feet": parse_float(r"Height:\s*([0-9.]+)\s*Feet", text),
-            "height_inches": parse_float(r"Height:\s*[0-9.]+\s*Feet\s*([0-9.]+)\s*Inch", text),
+            "weight_lbs": parse_float(r"Weight\s*:\s*([0-9.]+)", text, re.IGNORECASE),
+            "height_feet": parse_float(r"Height:\s*([0-9.]+)\s*Feet", text, re.IGNORECASE),
+            "height_inches": parse_float(r"Height:\s*[0-9.]+\s*Feet\s*([0-9.]+)\s*Inch", text, re.IGNORECASE),
         },
     }
 
-    # strict validation
     flat_values = []
-
     for section in response.values():
         for value in section.values():
             flat_values.append(value)
