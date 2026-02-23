@@ -4,3 +4,7 @@ numpy
 opencv-python-headless
 pdf2image
 Pillow
+PyMuPDF==1.23.9
+opencv-python-headless==4.9.0.80
+numpy
+flask
