@@ -1,19 +1,21 @@
-from flask import Flask, request, jsonify
-import fitz
+import base64
+import io
+import os
+import fitz  # PyMuPDF
 import cv2
 import numpy as np
-import os
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_VERSION = "hsv_v29_geometry_left_span_locked"
-API_KEY = "ithrive_secure_2026_key"
+ENGINE_VERSION = "hsv_v30_strict_isolate_locked"
+AUTH_KEY = "ithrive_secure_2026_key"
 
-ROWS_PER_PAGE = 14
-PAGE1_HEADING_ROWS = {0, 8}
-PAGE2_HEADING_ROWS = {0, 8}
+# ================================
+# Disease Order (Exact Row Order)
+# ================================
 
-PAGE1_DISEASE_KEYS = [
+PAGE_1 = [
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -25,10 +27,10 @@ PAGE1_DISEASE_KEYS = [
     "insulin_resistance",
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
-    "tissue_inflammatory_process",
+    "tissue_inflammatory_process"
 ]
 
-PAGE2_DISEASE_KEYS = [
+PAGE_2 = [
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -40,129 +42,202 @@ PAGE2_DISEASE_KEYS = [
     "major_depression",
     "adhd_children_learning",
     "cerebral_dopamine_decreased",
-    "cerebral_serotonin_decreased",
+    "cerebral_serotonin_decreased"
 ]
 
-def map_percent_to_label(percent):
-    if percent <= 10:
-        return "normal"
-    elif percent <= 20:
-        return "none"
-    elif percent <= 50:
-        return "mild"
-    elif percent <= 75:
-        return "moderate"
-    else:
-        return "severe"
+ALL_DISEASES = PAGE_1 + PAGE_2
 
-def render_page(page):
-    pix = page.get_pixmap(dpi=200)
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-    if pix.n == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
-    else:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    return img
+# =====================================
+# HSV STRICT COLOR ISOLATION
+# =====================================
 
-def detect_overlay_span(row_img):
+def positive_color_mask(hsv):
+    h = hsv[:, :, 0]
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
 
-    height, width, _ = row_img.shape
+    # -------------------------
+    # Exclude dark gray background
+    # Dark gray has LOW brightness
+    # -------------------------
+    bright = v > 120
 
-    # focus on central band vertically
-    y1 = int(height * 0.30)
-    y2 = int(height * 0.75)
-    scan = row_img[y1:y2, :]
+    # -------------------------
+    # Yellow
+    # -------------------------
+    yellow = (
+        (h >= 18) & (h <= 35) &
+        (s > 80) &
+        bright
+    )
 
-    hsv = cv2.cvtColor(scan, cv2.COLOR_BGR2HSV)
+    # -------------------------
+    # Orange
+    # -------------------------
+    orange = (
+        (h >= 8) & (h < 18) &
+        (s > 100) &
+        bright
+    )
 
-    # Color masks
-    yellow = cv2.inRange(hsv, (20, 80, 80), (35, 255, 255))
-    orange = cv2.inRange(hsv, (10, 100, 100), (20, 255, 255))
-    red1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
-    red2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
-    neutral = cv2.inRange(hsv, (0, 0, 160), (180, 40, 255))
+    # -------------------------
+    # Red
+    # -------------------------
+    red = (
+        ((h <= 6) | (h >= 170)) &
+        (s > 120) &
+        bright
+    )
 
-    mask = yellow | orange | red1 | red2 | neutral
+    # -------------------------
+    # Light Neutral Gray (None/Low)
+    # Low saturation, HIGH brightness
+    # -------------------------
+    neutral_light = (
+        (s < 40) &
+        (v > 170)
+    )
 
-    column_sum = np.sum(mask, axis=0)
-    threshold = np.max(column_sum) * 0.3
+    mask = yellow | orange | red | neutral_light
+    return mask.astype(np.uint8) * 255
 
-    overlay_cols = np.where(column_sum > threshold)[0]
 
-    if len(overlay_cols) == 0:
-        return 20
+# =====================================
+# Span Detection
+# =====================================
 
-    left = overlay_cols[0]
-    right = overlay_cols[-1]
+def detect_span_percent(crop):
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = positive_color_mask(hsv)
 
-    span_ratio = (right - left) / width
-    percent = int(round(span_ratio * 100 / 10) * 10)
+    height, width = mask.shape
 
-    percent = max(10, min(percent, 100))
+    # Collapse vertically (if ANY pixel in column is positive)
+    col_has_color = np.any(mask > 0, axis=0)
+
+    # Find last colored column from left
+    colored_indices = np.where(col_has_color)[0]
+
+    if len(colored_indices) == 0:
+        return 0
+
+    last_index = colored_indices[-1]
+    percent = int((last_index / width) * 100)
 
     return percent
 
-@app.route("/")
-def home():
-    return f"HSV Preprocess Service Running v29"
+
+# =====================================
+# Risk Label
+# =====================================
+
+def risk_from_percent(p):
+    if p >= 75:
+        return "severe"
+    elif p >= 50:
+        return "moderate"
+    elif p >= 25:
+        return "mild"
+    elif p > 0:
+        return "none"
+    else:
+        return "normal"
+
+
+# =====================================
+# PDF Processing
+# =====================================
+
+def process_pdf(file_stream):
+    results = {}
+
+    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+    pages_found = len(doc)
+
+    # Hard geometry crop region for bars
+    # Adjust if needed once stable
+    X_START = 900
+    X_END = 1700
+
+    Y_START_PAGE1 = 700
+    ROW_HEIGHT = 90
+    ROW_SPACING = 95
+
+    # PAGE 1
+    page1 = doc[0]
+    pix1 = page1.get_pixmap()
+    img1 = np.frombuffer(pix1.samples, dtype=np.uint8)
+    img1 = img1.reshape(pix1.height, pix1.width, pix1.n)
+
+    for i, disease in enumerate(PAGE_1):
+        y1 = Y_START_PAGE1 + i * ROW_SPACING
+        y2 = y1 + ROW_HEIGHT
+
+        crop = img1[y1:y2, X_START:X_END]
+
+        percent = detect_span_percent(crop)
+        label = risk_from_percent(percent)
+
+        results[disease] = {
+            "progression_percent": percent,
+            "risk_label": label,
+            "source": ENGINE_VERSION
+        }
+
+    # PAGE 2
+    page2 = doc[1]
+    pix2 = page2.get_pixmap()
+    img2 = np.frombuffer(pix2.samples, dtype=np.uint8)
+    img2 = img2.reshape(pix2.height, pix2.width, pix2.n)
+
+    Y_START_PAGE2 = 700
+
+    for i, disease in enumerate(PAGE_2):
+        y1 = Y_START_PAGE2 + i * ROW_SPACING
+        y2 = y1 + ROW_HEIGHT
+
+        crop = img2[y1:y2, X_START:X_END]
+
+        percent = detect_span_percent(crop)
+        label = risk_from_percent(percent)
+
+        results[disease] = {
+            "progression_percent": percent,
+            "risk_label": label,
+            "source": ENGINE_VERSION
+        }
+
+    return results, pages_found
+
+
+# =====================================
+# Routes
+# =====================================
+
+@app.route("/", methods=["GET"])
+def root():
+    return f"HSV Preprocess Service Running v30"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect_disease_bars():
-
-    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
+def detect():
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {AUTH_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
-    pdf_bytes = request.files["file"].read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    file = request.files["file"]
 
-    results = {}
-    target_pages = min(2, len(doc))
-
-    for page_index in range(target_pages):
-
-        page = doc.load_page(page_index)
-        img = render_page(page)
-
-        height = img.shape[0]
-        row_height = height // ROWS_PER_PAGE
-
-        disease_counter = 0
-
-        for row_index in range(ROWS_PER_PAGE):
-
-            if page_index == 0 and row_index in PAGE1_HEADING_ROWS:
-                continue
-            if page_index == 1 and row_index in PAGE2_HEADING_ROWS:
-                continue
-
-            y1 = row_index * row_height
-            y2 = (row_index + 1) * row_height
-            row_img = img[y1:y2, :]
-
-            if page_index == 0:
-                disease_key = PAGE1_DISEASE_KEYS[disease_counter]
-            else:
-                disease_key = PAGE2_DISEASE_KEYS[disease_counter]
-
-            percent = detect_overlay_span(row_img)
-
-            results[disease_key] = {
-                "progression_percent": percent,
-                "risk_label": map_percent_to_label(percent),
-                "source": ENGINE_VERSION
-            }
-
-            disease_counter += 1
+    results, pages_found = process_pdf(file)
 
     return jsonify({
         "engine": ENGINE_VERSION,
-        "pages_found": target_pages,
+        "pages_found": pages_found,
         "results": results
     })
 
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
