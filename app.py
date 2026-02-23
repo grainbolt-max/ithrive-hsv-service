@@ -1,35 +1,27 @@
 # ==============================
-# v31 STRICT SATURATION SPAN LOCKED
+# v31.1 STRICT SATURATION SPAN LOCKED (PyMuPDF)
 # ==============================
 
-import os
+import fitz  # PyMuPDF
 import cv2
 import numpy as np
 from flask import Flask, request, jsonify
-from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v31_strict_saturation_span_locked"
+ENGINE_NAME = "hsv_v31_1_strict_saturation_span_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
-# --- CONFIGURATION ---
-
-# Saturation threshold to remove gray background
 SATURATION_THRESHOLD = 50
 
-# Bar geometry (locked)
 BAR_LEFT = 350
 BAR_RIGHT = 1100
 BAR_HEIGHT = 28
 
-# Vertical spacing
 ROW_START_Y = 420
 ROW_GAP = 42
 
-# 24 diseases in fixed order
 DISEASE_ORDER = [
-    # Page 1
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -42,8 +34,6 @@ DISEASE_ORDER = [
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
     "tissue_inflammatory_process",
-
-    # Page 2
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -81,18 +71,12 @@ def analyze_bar(image, row_index):
     if roi.size == 0:
         return 0
 
-    # Convert safely to BGR if RGBA
-    if roi.shape[2] == 4:
-        roi = cv2.cvtColor(roi, cv2.COLOR_BGRA2BGR)
-
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    # Strict saturation isolate
     s_channel = hsv[:, :, 1]
-    color_mask = s_channel > SATURATION_THRESHOLD
+    mask = s_channel > SATURATION_THRESHOLD
 
-    # Find horizontal extent
-    cols = np.where(np.any(color_mask, axis=0))[0]
+    cols = np.where(np.any(mask, axis=0))[0]
 
     if len(cols) == 0:
         return 0
@@ -105,7 +89,7 @@ def analyze_bar(image, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v31"
+    return "HSV Preprocess Service Running v31.1"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -120,21 +104,26 @@ def detect():
     file = request.files["file"].read()
 
     try:
-        pages = convert_from_bytes(file, dpi=300)
+        doc = fitz.open(stream=file, filetype="pdf")
     except:
-        return jsonify({"error": "PDF conversion failed"}), 500
+        return jsonify({"error": "PDF open failed"}), 500
 
     results = {}
     disease_index = 0
 
-    for page in pages[:2]:  # Only first 2 pages contain bars
-        image = np.array(page)
+    for page_number in range(min(2, len(doc))):
+        page = doc.load_page(page_number)
+        pix = page.get_pixmap(dpi=300)
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
 
-        for _ in range(12):
+        if pix.n == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+        for row in range(12):
             if disease_index >= len(DISEASE_ORDER):
                 break
 
-            percent = analyze_bar(image, disease_index % 12)
+            percent = analyze_bar(img, row)
             label = risk_label_from_percent(percent)
 
             results[DISEASE_ORDER[disease_index]] = {
@@ -147,7 +136,7 @@ def detect():
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "pages_found": len(pages),
+        "pages_found": len(doc),
         "results": results
     })
 
