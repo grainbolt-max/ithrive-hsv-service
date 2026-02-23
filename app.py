@@ -11,17 +11,13 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
 
-# ══════════════════════════════════════════════════════════════════
-# HEALTH CHECK
-# ══════════════════════════════════════════════════════════════════
-
 @app.route("/", methods=["GET"])
 def health():
     return "HSV Preprocess Service Running", 200
 
 
 # ══════════════════════════════════════════════════════════════════
-# DISEASE BAR ENGINE v9 (FILL ISOLATION + LAST 2 PAGES)
+# DISEASE BAR ENGINE v10 (Calibrated)
 # ══════════════════════════════════════════════════════════════════
 
 DISEASE_FIELDS_ORDERED = [
@@ -67,7 +63,6 @@ PAGE_Y_STARTS = [
 
 def find_disease_pages(doc):
     total = len(doc)
-
     if total >= 2:
         return [total - 2, total - 1]
     elif total == 1:
@@ -77,7 +72,7 @@ def find_disease_pages(doc):
 
 
 # ─────────────────────────────────────────────────────────────────
-# FILL ISOLATION ENGINE
+# FILL ISOLATION + CLASSIFICATION
 # ─────────────────────────────────────────────────────────────────
 
 def isolate_fill_and_classify(page_img, x, y, w, h):
@@ -98,8 +93,8 @@ def isolate_fill_and_classify(page_img, x, y, w, h):
     h_map = hsv_bar[:, :, 0].astype(float) * 2.0
     s_map = hsv_bar[:, :, 1].astype(float) / 255.0
 
-    # Detect fill using saturation only
-    SAT_FILL_THRESHOLD = 0.10
+    # VERY LOW fill detection threshold
+    SAT_FILL_THRESHOLD = 0.035
     col_sat = s_map.mean(axis=0)
     fill_cols = np.where(col_sat > SAT_FILL_THRESHOLD)[0]
 
@@ -121,16 +116,18 @@ def isolate_fill_and_classify(page_img, x, y, w, h):
     avg_h = float(np.mean(fill_h))
     avg_s = float(np.mean(fill_s))
 
-    # TRUE GREY (none/low risk)
-    if avg_s < 0.07:
+    print("DEBUG avg_h:", round(avg_h,1), "avg_s:", round(avg_s,3))
+
+    # STRICT grey detection
+    if avg_s < 0.025:
         return {"risk_label": "none", "progression_percent": 20}
 
-    # Hue classification
-    if avg_h <= 25 or avg_h >= 335:
+    # Hue classification (expanded bands)
+    if avg_h <= 30 or avg_h >= 330:
         return {"risk_label": "severe", "progression_percent": 85}
-    elif 26 <= avg_h <= 44:
+    elif 31 <= avg_h <= 50:
         return {"risk_label": "moderate", "progression_percent": 65}
-    elif 45 <= avg_h <= 70:
+    elif 51 <= avg_h <= 85:
         return {"risk_label": "mild", "progression_percent": 50}
     else:
         return {"risk_label": "none", "progression_percent": 20}
@@ -160,13 +157,6 @@ def detect_disease_bars():
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         disease_pages = find_disease_pages(doc)
 
-        if not disease_pages:
-            return jsonify({
-                "results": {},
-                "engine": "hsv_v9_fill_last2",
-                "pages_found": 0
-            })
-
         results = {}
         page_images = []
 
@@ -184,7 +174,7 @@ def detect_disease_bars():
                 results[field] = {
                     "risk_label": "none",
                     "progression_percent": 20,
-                    "source": "hsv_v9_fill_last2"
+                    "source": "hsv_v10_calibrated"
                 }
                 continue
 
@@ -201,14 +191,14 @@ def detect_disease_bars():
             results[field] = {
                 "risk_label": classification["risk_label"],
                 "progression_percent": classification["progression_percent"],
-                "source": "hsv_v9_fill_last2"
+                "source": "hsv_v10_calibrated"
             }
 
         doc.close()
 
         return jsonify({
             "results": results,
-            "engine": "hsv_v9_fill_last2",
+            "engine": "hsv_v10_calibrated",
             "pages_found": len(disease_pages)
         })
 
