@@ -1,5 +1,5 @@
 # ============================================
-# v33 STRICT SATURATION SPAN LOCKED
+# v34 STRICT HUE + SATURATION SPAN LOCKED
 # PAGE-AWARE GEOMETRY
 # PyMuPDF @ 300 DPI
 # ============================================
@@ -11,21 +11,20 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v33_page_aware_geometry_locked"
+ENGINE_NAME = "hsv_v34_strict_hue_saturation_span_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
 # DETECTION CONFIG
 # ----------------------------
 
-SATURATION_THRESHOLD = 50
+SATURATION_THRESHOLD = 60
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
 BAR_HEIGHT = 26
 ROW_GAP = 44
 
-# Different vertical anchors per page
 PAGE1_ROW_START_Y = 455
 PAGE2_ROW_START_Y = 430
 
@@ -76,6 +75,22 @@ def risk_label_from_percent(p):
         return "none"
 
 # ----------------------------
+# COLOR MASK (YELLOW / ORANGE / RED ONLY)
+# ----------------------------
+
+def disease_color_mask(hsv):
+    h = hsv[:, :, 0]
+    s = hsv[:, :, 1]
+
+    red_mask = ((h >= 0) & (h <= 10)) | ((h >= 170) & (h <= 180))
+    orange_mask = (h > 10) & (h <= 20)
+    yellow_mask = (h > 20) & (h <= 35)
+
+    color_mask = (s > SATURATION_THRESHOLD) & (red_mask | orange_mask | yellow_mask)
+
+    return color_mask
+
+# ----------------------------
 # BAR ANALYSIS
 # ----------------------------
 
@@ -89,9 +104,8 @@ def analyze_bar(image, base_y, row_index):
         return 0
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    s_channel = hsv[:, :, 1]
 
-    mask = s_channel > SATURATION_THRESHOLD
+    mask = disease_color_mask(hsv)
 
     cols = np.where(np.any(mask, axis=0))[0]
 
@@ -109,7 +123,7 @@ def analyze_bar(image, base_y, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v33"
+    return "HSV Preprocess Service Running v34"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -140,11 +154,7 @@ def detect():
         if pix.n == 4:
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-        # Select correct vertical anchor
-        if page_number == 0:
-            base_y = PAGE1_ROW_START_Y
-        else:
-            base_y = PAGE2_ROW_START_Y
+        base_y = PAGE1_ROW_START_Y if page_number == 0 else PAGE2_ROW_START_Y
 
         for row in range(12):
             if disease_index >= len(DISEASE_ORDER):
