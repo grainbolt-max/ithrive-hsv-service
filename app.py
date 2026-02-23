@@ -8,7 +8,7 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v21_stripe_locked"
+ENGINE_NAME = "hsv_v22_stripe_locked"
 
 # =========================
 # FIXED DISEASE ORDER
@@ -53,7 +53,7 @@ ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v21", 200
+    return "HSV Preprocess Service Running v22", 200
 
 
 # =========================
@@ -80,8 +80,8 @@ def detect_stripe_segments(image):
     # Average vertical edge energy per row
     row_energy = np.mean(edge_strength, axis=1)
 
-    # Stripe detection threshold (stable for template)
-    mask = row_energy > 12
+    # LOWERED threshold (was 12)
+    mask = row_energy > 5
 
     segments = []
     start = None
