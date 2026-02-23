@@ -1,18 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException
-from fastapi.responses import JSONResponse
-from pdf2image import convert_from_bytes
-import numpy as np
+from flask import Flask, request, jsonify
+import fitz
 import cv2
-import io
+import numpy as np
+import os
 
-app = FastAPI()
+app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v29_geometry_left_span_locked"
+ENGINE_VERSION = "hsv_v29_geometry_left_span_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 ROWS_PER_PAGE = 14
-
-# Row indexes (0-based)
 PAGE1_HEADING_ROWS = {0, 8}
 PAGE2_HEADING_ROWS = {0, 8}
 
@@ -58,119 +55,114 @@ def map_percent_to_label(percent):
     else:
         return "severe"
 
+def render_page(page):
+    pix = page.get_pixmap(dpi=200)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    if pix.n == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    else:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    return img
+
 def detect_overlay_span(row_img):
-    """
-    Detect colored overlay width inside a single disease row.
-    Overlay is left-aligned.
-    """
 
     height, width, _ = row_img.shape
 
-    # Only scan middle vertical band (ignore top/bottom padding)
-    y1 = int(height * 0.25)
+    # focus on central band vertically
+    y1 = int(height * 0.30)
     y2 = int(height * 0.75)
     scan = row_img[y1:y2, :]
 
-    # Convert to HSV
     hsv = cv2.cvtColor(scan, cv2.COLOR_BGR2HSV)
 
-    # Define color ranges (striped colors)
-    masks = []
+    # Color masks
+    yellow = cv2.inRange(hsv, (20, 80, 80), (35, 255, 255))
+    orange = cv2.inRange(hsv, (10, 100, 100), (20, 255, 255))
+    red1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
+    red2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
+    neutral = cv2.inRange(hsv, (0, 0, 160), (180, 40, 255))
 
-    # Yellow
-    masks.append(cv2.inRange(hsv, (20, 80, 80), (35, 255, 255)))
+    mask = yellow | orange | red1 | red2 | neutral
 
-    # Orange
-    masks.append(cv2.inRange(hsv, (10, 100, 100), (20, 255, 255)))
-
-    # Red
-    masks.append(cv2.inRange(hsv, (0, 100, 100), (10, 255, 255)))
-
-    # Neutral light gray (striped)
-    masks.append(cv2.inRange(hsv, (0, 0, 160), (180, 40, 255)))
-
-    combined = masks[0]
-    for m in masks[1:]:
-        combined = cv2.bitwise_or(combined, m)
-
-    # Sum mask vertically to find span
-    column_sum = np.sum(combined, axis=0)
-
-    # Threshold to determine if column contains overlay
+    column_sum = np.sum(mask, axis=0)
     threshold = np.max(column_sum) * 0.3
-    overlay_columns = np.where(column_sum > threshold)[0]
 
-    if len(overlay_columns) == 0:
-        return 20  # fallback baseline
+    overlay_cols = np.where(column_sum > threshold)[0]
 
-    left = overlay_columns[0]
-    right = overlay_columns[-1]
+    if len(overlay_cols) == 0:
+        return 20
+
+    left = overlay_cols[0]
+    right = overlay_cols[-1]
 
     span_ratio = (right - left) / width
     percent = int(round(span_ratio * 100 / 10) * 10)
 
-    if percent < 10:
-        percent = 10
-    if percent > 100:
-        percent = 100
+    percent = max(10, min(percent, 100))
 
     return percent
 
-@app.post("/v1/detect-disease-bars")
-async def detect_disease_bars(
-    file: UploadFile = File(...),
-    authorization: str = Header(None)
-):
+@app.route("/")
+def home():
+    return f"HSV Preprocess Service Running v29"
 
-    if authorization != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
+@app.route("/v1/detect-disease-bars", methods=["POST"])
+def detect_disease_bars():
 
-    pdf_bytes = await file.read()
-    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    pdf_bytes = request.files["file"].read()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     results = {}
+    target_pages = min(2, len(doc))
 
-    # We only process first 2 relevant pages
-    relevant_pages = pages[:2]
+    for page_index in range(target_pages):
 
-    for page_index, page in enumerate(relevant_pages):
+        page = doc.load_page(page_index)
+        img = render_page(page)
 
-        img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
-
-        height, width, _ = img.shape
+        height = img.shape[0]
         row_height = height // ROWS_PER_PAGE
 
-        disease_row_counter = 0
+        disease_counter = 0
 
         for row_index in range(ROWS_PER_PAGE):
 
-            y1 = row_index * row_height
-            y2 = (row_index + 1) * row_height
-            row_img = img[y1:y2, :]
-
-            # Skip headings
             if page_index == 0 and row_index in PAGE1_HEADING_ROWS:
                 continue
             if page_index == 1 and row_index in PAGE2_HEADING_ROWS:
                 continue
 
+            y1 = row_index * row_height
+            y2 = (row_index + 1) * row_height
+            row_img = img[y1:y2, :]
+
             if page_index == 0:
-                disease_key = PAGE1_DISEASE_KEYS[disease_row_counter]
+                disease_key = PAGE1_DISEASE_KEYS[disease_counter]
             else:
-                disease_key = PAGE2_DISEASE_KEYS[disease_row_counter]
+                disease_key = PAGE2_DISEASE_KEYS[disease_counter]
 
             percent = detect_overlay_span(row_img)
 
             results[disease_key] = {
                 "progression_percent": percent,
                 "risk_label": map_percent_to_label(percent),
-                "source": ENGINE_NAME
+                "source": ENGINE_VERSION
             }
 
-            disease_row_counter += 1
+            disease_counter += 1
 
-    return JSONResponse({
-        "engine": ENGINE_NAME,
-        "pages_found": 2,
+    return jsonify({
+        "engine": ENGINE_VERSION,
+        "pages_found": target_pages,
         "results": results
     })
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
