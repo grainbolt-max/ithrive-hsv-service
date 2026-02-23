@@ -1,5 +1,4 @@
 import os
-import re
 import io
 import base64
 import traceback
@@ -12,10 +11,18 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
 
+# ══════════════════════════════════════════════════════════════════
+# HEALTH CHECK
+# ══════════════════════════════════════════════════════════════════
+
 @app.route("/", methods=["GET"])
 def health():
     return "HSV Preprocess Service Running", 200
 
+
+# ══════════════════════════════════════════════════════════════════
+# DISEASE BAR ENGINE v9 (FILL ISOLATION + LAST 2 PAGES)
+# ══════════════════════════════════════════════════════════════════
 
 DISEASE_FIELDS_ORDERED = [
     "large_artery_stiffness",
@@ -54,14 +61,24 @@ PAGE_Y_STARTS = [
 ]
 
 
-def find_disease_pages(doc):
-    pages = []
-    for i, page in enumerate(doc):
-        text = page.get_text()
-        if re.search(r"Diseases?\s+and\s+disorder\s+screening", text, re.IGNORECASE):
-            pages.append(i)
-    return pages
+# ─────────────────────────────────────────────────────────────────
+# ALWAYS PROCESS LAST 2 PAGES
+# ─────────────────────────────────────────────────────────────────
 
+def find_disease_pages(doc):
+    total = len(doc)
+
+    if total >= 2:
+        return [total - 2, total - 1]
+    elif total == 1:
+        return [0]
+    else:
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────
+# FILL ISOLATION ENGINE
+# ─────────────────────────────────────────────────────────────────
 
 def isolate_fill_and_classify(page_img, x, y, w, h):
 
@@ -81,7 +98,7 @@ def isolate_fill_and_classify(page_img, x, y, w, h):
     h_map = hsv_bar[:, :, 0].astype(float) * 2.0
     s_map = hsv_bar[:, :, 1].astype(float) / 255.0
 
-    # Detect fill columns by saturation
+    # Detect fill using saturation only
     SAT_FILL_THRESHOLD = 0.10
     col_sat = s_map.mean(axis=0)
     fill_cols = np.where(col_sat > SAT_FILL_THRESHOLD)[0]
@@ -104,7 +121,7 @@ def isolate_fill_and_classify(page_img, x, y, w, h):
     avg_h = float(np.mean(fill_h))
     avg_s = float(np.mean(fill_s))
 
-    # Grey detection
+    # TRUE GREY (none/low risk)
     if avg_s < 0.07:
         return {"risk_label": "none", "progression_percent": 20}
 
@@ -118,6 +135,10 @@ def isolate_fill_and_classify(page_img, x, y, w, h):
     else:
         return {"risk_label": "none", "progression_percent": 20}
 
+
+# ─────────────────────────────────────────────────────────────────
+# DETECT ENDPOINT
+# ─────────────────────────────────────────────────────────────────
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
@@ -140,12 +161,16 @@ def detect_disease_bars():
         disease_pages = find_disease_pages(doc)
 
         if not disease_pages:
-            return jsonify({"results": {}, "engine": "hsv_v8_fill", "pages_found": 0})
+            return jsonify({
+                "results": {},
+                "engine": "hsv_v9_fill_last2",
+                "pages_found": 0
+            })
 
         results = {}
         page_images = []
 
-        for idx in disease_pages[:2]:
+        for idx in disease_pages:
             pix = doc[idx].get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             page_images.append(np.array(img))
@@ -156,9 +181,11 @@ def detect_disease_bars():
             row = i if i < 12 else i - 12
 
             if page_num >= len(page_images):
-                results[field] = {"risk_label": "none",
-                                  "progression_percent": 20,
-                                  "source": "hsv_v8_fill"}
+                results[field] = {
+                    "risk_label": "none",
+                    "progression_percent": 20,
+                    "source": "hsv_v9_fill_last2"
+                }
                 continue
 
             bar_y = PAGE_Y_STARTS[row]
@@ -174,14 +201,14 @@ def detect_disease_bars():
             results[field] = {
                 "risk_label": classification["risk_label"],
                 "progression_percent": classification["progression_percent"],
-                "source": "hsv_v8_fill"
+                "source": "hsv_v9_fill_last2"
             }
 
         doc.close()
 
         return jsonify({
             "results": results,
-            "engine": "hsv_v8_fill",
+            "engine": "hsv_v9_fill_last2",
             "pages_found": len(disease_pages)
         })
 
@@ -192,7 +219,7 @@ def detect_disease_bars():
 
 @app.route("/v1/calibrate-disease-bars", methods=["POST"])
 def calibrate_disease_bars():
-    return jsonify({"message": "Calibration unchanged"})
+    return jsonify({"message": "Calibration endpoint unchanged"})
 
 
 if __name__ == "__main__":
