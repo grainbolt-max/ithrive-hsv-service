@@ -1,174 +1,179 @@
 import os
 import io
-import re
+import base64
 import traceback
 import numpy as np
 import cv2
-from PIL import Image
 from flask import Flask, request, jsonify
+from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v16_production"
 
-# ===============================
-# HEALTH CHECK
-# ===============================
+ENGINE_NAME = "hsv_v17_locked"
+
+# ==============================
+# PAGE ROW DEFINITIONS (LOCKED)
+# ==============================
+
+PAGE_1_KEYS = [
+    "large_artery_stiffness",
+    "peripheral_vessels",
+    "blood_glucose_uncontrolled",
+    "small_medium_artery_stiffness",
+    "atherosclerosis",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "metabolic_syndrome",
+    "insulin_resistance",
+    "beta_cell_function_decreased",
+    "blood_glucose_uncontrolled",
+    "tissue_inflammatory_process"
+]
+
+PAGE_2_KEYS = [
+    "hypothyroidism",
+    "hyperthyroidism",
+    "hepatic_fibrosis",
+    "chronic_hepatitis",
+    "respiratory",
+    "kidney_function",
+    "digestive_disorders",
+    "major_depression",
+    "adhd_children_learning",
+    "cerebral_dopamine_decreased",
+    "cerebral_serotonin_decreased"
+]
+
+ALL_KEYS = list(set(PAGE_1_KEYS + PAGE_2_KEYS))
+
+# ==============================
+# HEALTH
+# ==============================
+
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v16", 200
+    return f"HSV Preprocess Service Running v17", 200
 
+# ==============================
+# CORE BAR DETECTION
+# ==============================
 
-# ===============================
-# CONFIG
-# ===============================
-BAR_X_RATIO = 0.28
-BAR_W_RATIO = 0.62
-BAR_HEIGHT = 32
-BAR_SPACING = 70
+def detect_bars_from_page(image, expected_keys):
+    h, w, _ = image.shape
 
+    # Crop Disease Score column (locked by screenshot analysis)
+    x1 = int(w * 0.48)
+    x2 = int(w * 0.85)
+    y1 = int(h * 0.18)
+    y2 = int(h * 0.88)
 
-# ===============================
-# PDF UTILITIES
-# ===============================
-def load_disease_pages(file_storage):
-    import fitz
+    score_col = image[y1:y2, x1:x2]
 
-    pdf_bytes = file_storage.read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    hsv = cv2.cvtColor(score_col, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
 
-    pages = []
+    # Detect colored rows by saturation projection
+    row_strength = np.mean(saturation, axis=1)
 
-    for page in doc:
-        text = page.get_text()
+    threshold = 25
+    colored_rows = row_strength > threshold
 
-        if re.search(r"Disease", text, re.IGNORECASE):
-            pix = page.get_pixmap(dpi=200)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            pages.append(np.array(img))
+    segments = []
+    start = None
 
-    return pages
+    for i, val in enumerate(colored_rows):
+        if val and start is None:
+            start = i
+        elif not val and start is not None:
+            if i - start > 8:
+                segments.append((start, i))
+            start = None
 
+    if start is not None:
+        segments.append((start, len(colored_rows)))
 
-# ===============================
-# BAR LOCATION
-# ===============================
-def find_first_bar_row(page_img):
-    hsv = cv2.cvtColor(page_img, cv2.COLOR_RGB2HSV)
-    sat = hsv[:, :, 1] / 255.0
+    results = {}
 
-    mask = sat > 0.30
-    row_strength = mask.sum(axis=1)
+    segments = sorted(segments, key=lambda x: x[0])
 
-    for y in range(len(row_strength)):
-        if row_strength[y] > 400:
-            return y
+    for idx, seg in enumerate(segments):
+        if idx >= len(expected_keys):
+            break
 
-    return None
+        key = expected_keys[idx]
 
+        y_top = seg[0]
+        y_bot = seg[1]
 
-# ===============================
-# COLOR CLASSIFIER
-# ===============================
-def classify_bar(crop):
-    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+        bar_img = hsv[y_top:y_bot, :, :]
 
-    h = hsv[:, :, 0].astype(float) * 2.0
-    s = hsv[:, :, 1] / 255.0
-    v = hsv[:, :, 2] / 255.0
+        hue = bar_img[:, :, 0]
+        sat = bar_img[:, :, 1]
 
-    avg_h = float(np.mean(h))
-    avg_s = float(np.mean(s))
-    avg_v = float(np.mean(v))
+        mask = sat > 30
+        if np.sum(mask) == 0:
+            continue
 
-    # 1️⃣ None / Grey (very low saturation)
-    if avg_s < 0.08:
-        return "none", 20
+        avg_hue = np.mean(hue[mask])
 
-    # 2️⃣ Yellow (mild)
-    if 40 <= avg_h <= 70 and avg_s > 0.15:
-        return "mild", 50
+        if 20 <= avg_hue <= 35:
+            label = "mild"
+            percent = 50
+        elif 0 <= avg_hue <= 10:
+            label = "severe"
+            percent = 85
+        elif 45 <= avg_hue <= 80:
+            label = "normal"
+            percent = 10
+        else:
+            label = "none"
+            percent = 20
 
-    # 3️⃣ Orange (moderate)
-    if 15 <= avg_h < 40:
-        return "moderate", 65
+        results[key] = {
+            "progression_percent": percent,
+            "risk_label": label,
+            "source": ENGINE_NAME
+        }
 
-    # 4️⃣ Red (severe)
-    if avg_h < 15 or avg_h > 340:
-        return "severe", 85
+    return results
 
-    # fallback
-    return "mild", 50
-
-
-# ===============================
+# ==============================
 # DETECT ENDPOINT
-# ===============================
+# ==============================
+
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect_disease():
+def detect_disease_bars():
     try:
-        auth = request.headers.get("Authorization", "")
-        if f"Bearer {API_KEY}" != auth:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {API_KEY}":
             return jsonify({"error": "Unauthorized"}), 401
 
         if "file" not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
+            return jsonify({"error": "No file provided"}), 400
 
-        pages = load_disease_pages(request.files["file"])
+        file = request.files["file"]
+        pdf_bytes = file.read()
+
+        pages = convert_from_bytes(pdf_bytes, dpi=200)
 
         results = {}
 
-        disease_keys = [
-            "large_artery_stiffness",
-            "peripheral_vessels",
-            "small_medium_artery_stiffness",
-            "atherosclerosis",
-            "lv_hypertrophy",
-            "ldl_cholesterol",
-            "metabolic_syndrome",
-            "insulin_resistance",
-            "hepatic_fibrosis",
-            "chronic_hepatitis",
-            "respiratory",
-            "bp_uncontrolled",
-            "beta_cell_function_decreased",
-            "blood_glucose_uncontrolled",
-            "tissue_inflammatory_process",
-            "prostate_cancer",
-            "major_depression",
-            "adhd_children_learning",
-            "cerebral_dopamine_decreased",
-            "cerebral_serotonin_decreased",
-            "kidney_function",
-            "hyperthyroidism",
-            "hypothyroidism",
-            "digestive_disorders"
-        ]
+        if len(pages) >= 1:
+            img1 = cv2.cvtColor(np.array(pages[0]), cv2.COLOR_RGB2BGR)
+            results.update(detect_bars_from_page(img1, PAGE_1_KEYS))
 
-        for page in pages:
-            h_img, w_img = page.shape[:2]
+        if len(pages) >= 2:
+            img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
+            results.update(detect_bars_from_page(img2, PAGE_2_KEYS))
 
-            first_bar_y = find_first_bar_row(page)
-            if first_bar_y is None:
-                continue
-
-            BAR_X = int(w_img * BAR_X_RATIO)
-            BAR_W = int(w_img * BAR_W_RATIO)
-
-            for i, key in enumerate(disease_keys):
-                y = first_bar_y + (i * BAR_SPACING)
-
-                if y + BAR_HEIGHT >= h_img:
-                    break
-
-                crop = page[y:y+BAR_HEIGHT, BAR_X:BAR_X+BAR_W]
-
-                label, percent = classify_bar(crop)
-
+        # Ensure all expected keys exist
+        for key in ALL_KEYS:
+            if key not in results:
                 results[key] = {
-                    "risk_label": label,
-                    "progression_percent": percent,
+                    "progression_percent": 20,
+                    "risk_label": "none",
                     "source": ENGINE_NAME
                 }
 
@@ -179,11 +184,5 @@ def detect_disease():
         })
 
     except Exception as e:
-        return jsonify({
-            "error": str(e),
-            "trace": traceback.format_exc()
-        }), 500
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
