@@ -1,5 +1,6 @@
 # ============================================
-# v32 STRICT SATURATION SPAN LOCKED (CALIBRATED)
+# v33 STRICT SATURATION SPAN LOCKED
+# PAGE-AWARE GEOMETRY
 # PyMuPDF @ 300 DPI
 # ============================================
 
@@ -10,7 +11,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v32_strict_saturation_span_calibrated"
+ENGINE_NAME = "hsv_v33_page_aware_geometry_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
@@ -21,10 +22,12 @@ SATURATION_THRESHOLD = 50
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
+BAR_HEIGHT = 26
+ROW_GAP = 44
 
-BAR_HEIGHT = 26          # slightly reduced
-ROW_START_Y = 455        # shifted down
-ROW_GAP = 44             # slightly increased
+# Different vertical anchors per page
+PAGE1_ROW_START_Y = 455
+PAGE2_ROW_START_Y = 430
 
 DISEASE_ORDER = [
     # Page 1
@@ -56,7 +59,6 @@ DISEASE_ORDER = [
     "cerebral_serotonin_decreased",
 ]
 
-
 # ----------------------------
 # RISK MAPPING
 # ----------------------------
@@ -73,13 +75,12 @@ def risk_label_from_percent(p):
     else:
         return "none"
 
-
 # ----------------------------
 # BAR ANALYSIS
 # ----------------------------
 
-def analyze_bar(image, row_index):
-    y1 = ROW_START_Y + (row_index * ROW_GAP)
+def analyze_bar(image, base_y, row_index):
+    y1 = base_y + (row_index * ROW_GAP)
     y2 = y1 + BAR_HEIGHT
 
     roi = image[y1:y2, BAR_LEFT:BAR_RIGHT]
@@ -102,15 +103,13 @@ def analyze_bar(image, row_index):
 
     return percent
 
-
 # ----------------------------
 # ROUTES
 # ----------------------------
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v32"
-
+    return "HSV Preprocess Service Running v33"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -141,11 +140,17 @@ def detect():
         if pix.n == 4:
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
+        # Select correct vertical anchor
+        if page_number == 0:
+            base_y = PAGE1_ROW_START_Y
+        else:
+            base_y = PAGE2_ROW_START_Y
+
         for row in range(12):
             if disease_index >= len(DISEASE_ORDER):
                 break
 
-            percent = analyze_bar(img, row)
+            percent = analyze_bar(img, base_y, row)
             label = risk_label_from_percent(percent)
 
             results[DISEASE_ORDER[disease_index]] = {
@@ -161,7 +166,6 @@ def detect():
         "pages_found": len(doc),
         "results": results
     })
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
