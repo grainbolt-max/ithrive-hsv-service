@@ -1,5 +1,6 @@
 import os
 import io
+import base64
 import traceback
 import numpy as np
 import cv2
@@ -16,11 +17,11 @@ API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v13", 200
+    return "HSV Preprocess Service Running v14", 200
 
 
 # ═══════════════════════════════════════════════════════════════
-# DISEASE ENGINE v13 — LAST 2 PAGES + SOLID FILL ISOLATION
+# DISEASE ENGINE v14 — POSITIONAL + SOLID FILL ISOLATION
 # ═══════════════════════════════════════════════════════════════
 
 DISEASE_FIELDS_ORDERED = [
@@ -59,9 +60,8 @@ PAGE_Y_STARTS = [
     1128, 1216, 1304, 1392, 1480, 1568
 ]
 
-
 # ──────────────────────────────────────────────────────────────
-# DETERMINISTIC PAGE SELECTION
+# DETERMINISTIC PAGE SELECTION (LAST 2 PAGES)
 # ──────────────────────────────────────────────────────────────
 
 def find_disease_pages(doc):
@@ -69,7 +69,6 @@ def find_disease_pages(doc):
     if total_pages >= 2:
         return [total_pages - 2, total_pages - 1]
     return []
-
 
 # ──────────────────────────────────────────────────────────────
 # SOLID FILL ISOLATION (IGNORE GRADIENT TAIL)
@@ -88,11 +87,10 @@ def isolate_solid_fill(page_img, x, y, w, h):
 
     hsv = cv2.cvtColor(bar, cv2.COLOR_RGB2HSV)
     sat = hsv[:, :, 1].astype(float) / 255.0
-
     col_sat = sat.mean(axis=0)
 
     SAT_SOLID_THRESHOLD = 0.25
-    MIN_SOLID_WIDTH = 20
+    MIN_SOLID_WIDTH = 25
 
     fill_end = 0
 
@@ -116,7 +114,6 @@ def isolate_solid_fill(page_img, x, y, w, h):
 
     return solid.reshape(-1, 3)
 
-
 # ──────────────────────────────────────────────────────────────
 # CLASSIFICATION
 # ──────────────────────────────────────────────────────────────
@@ -133,7 +130,7 @@ def classify_fill(pixels):
     avg_h = float(np.mean(h_vals))
     avg_s = float(np.mean(s_vals))
 
-    # Grey = None
+    # Grey / None
     if avg_s < 0.15:
         return "none", 20
 
@@ -146,7 +143,6 @@ def classify_fill(pixels):
         return "mild", 50
     else:
         return "none", 20
-
 
 # ──────────────────────────────────────────────────────────────
 # DETECT ENDPOINT
@@ -175,7 +171,7 @@ def detect_disease_bars():
         if not disease_pages:
             return jsonify({
                 "results": {},
-                "engine": "hsv_v13_final",
+                "engine": "hsv_v14_final",
                 "pages_found": 0
             })
 
@@ -195,7 +191,7 @@ def detect_disease_bars():
                 results[field] = {
                     "risk_label": "none",
                     "progression_percent": 20,
-                    "source": "hsv_v13_final"
+                    "source": "hsv_v14_final"
                 }
                 continue
 
@@ -214,20 +210,70 @@ def detect_disease_bars():
             results[field] = {
                 "risk_label": label,
                 "progression_percent": pct,
-                "source": "hsv_v13_final"
+                "source": "hsv_v14_final"
             }
 
         doc.close()
 
         return jsonify({
             "results": results,
-            "engine": "hsv_v13_final",
+            "engine": "hsv_v14_final",
             "pages_found": len(disease_pages)
         })
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+# ──────────────────────────────────────────────────────────────
+# CALIBRATION ENDPOINT (FOR VISUAL DEBUG)
+# ──────────────────────────────────────────────────────────────
+
+@app.route("/v1/calibrate-disease-bars", methods=["POST"])
+def calibrate_disease_bars():
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if auth_header.replace("Bearer ", "") != API_KEY:
+        return jsonify({"error": "Invalid API Key"}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "Missing file"}), 400
+
+    import fitz
+    pdf_bytes = request.files["file"].read()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    disease_pages = find_disease_pages(doc)
+    crops = {}
+
+    for page_num, idx in enumerate(disease_pages):
+        pix = doc[idx].get_pixmap(dpi=300)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        page_img = np.array(img)
+
+        start_idx = 0 if page_num == 0 else 12
+
+        for row, y in enumerate(PAGE_Y_STARTS):
+            field_idx = start_idx + row
+            if field_idx >= len(DISEASE_FIELDS_ORDERED):
+                break
+
+            field = DISEASE_FIELDS_ORDERED[field_idx]
+
+            y2 = min(y + BAR_H, page_img.shape[0])
+            x2 = min(BAR_X + BAR_W, page_img.shape[1])
+
+            crop = page_img[y:y2, BAR_X:x2]
+
+            buf = io.BytesIO()
+            Image.fromarray(crop).save(buf, format="PNG")
+
+            crops[field] = base64.b64encode(buf.getvalue()).decode()
+
+    doc.close()
+    return jsonify({"crops": crops})
 
 
 if __name__ == "__main__":
