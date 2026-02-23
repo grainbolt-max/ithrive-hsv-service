@@ -22,7 +22,7 @@ def health():
 
 
 # ═══════════════════════════════════════════════════════════════
-# DISEASE ENGINE v12 – SOLID FILL SATURATION DROP ISOLATION
+# DISEASE ENGINE v12 — SOLID FILL SATURATION DROP ISOLATION
 # ═══════════════════════════════════════════════════════════════
 
 DISEASE_FIELDS_ORDERED = [
@@ -62,14 +62,22 @@ PAGE_Y_STARTS = [
 ]
 
 
+# ──────────────────────────────────────────────────────────────
+# BROAD PAGE DETECTION (FIXED)
+# ──────────────────────────────────────────────────────────────
+
 def find_disease_pages(doc):
     pages = []
     for i, page in enumerate(doc):
-        text = page.get_text()
-        if re.search(r"Disease\s*&\s*Risk\s*Screening", text, re.IGNORECASE):
+        text = page.get_text().lower()
+        if "disease" in text and "screening" in text:
             pages.append(i)
     return pages
 
+
+# ──────────────────────────────────────────────────────────────
+# SOLID FILL ISOLATION
+# ──────────────────────────────────────────────────────────────
 
 def isolate_solid_fill(page_img, x, y, w, h):
     img_h, img_w = page_img.shape[:2]
@@ -87,10 +95,10 @@ def isolate_solid_fill(page_img, x, y, w, h):
 
     col_sat = sat.mean(axis=0)
 
-    # Detect solid fill region by saturation drop
-    fill_end = 0
     SAT_SOLID_THRESHOLD = 0.25
     MIN_SOLID_WIDTH = 20
+
+    fill_end = 0
 
     for i, s in enumerate(col_sat):
         if s > SAT_SOLID_THRESHOLD:
@@ -102,7 +110,6 @@ def isolate_solid_fill(page_img, x, y, w, h):
     if fill_end < MIN_SOLID_WIDTH:
         return None
 
-    # Crop only solid portion
     solid = bar[:, :fill_end]
 
     vert_margin = int(solid.shape[0] * 0.2)
@@ -113,6 +120,10 @@ def isolate_solid_fill(page_img, x, y, w, h):
 
     return solid.reshape(-1, 3)
 
+
+# ──────────────────────────────────────────────────────────────
+# CLASSIFICATION
+# ──────────────────────────────────────────────────────────────
 
 def classify_fill(pixels):
     if pixels is None or len(pixels) == 0:
@@ -126,7 +137,7 @@ def classify_fill(pixels):
     avg_h = float(np.mean(h_vals))
     avg_s = float(np.mean(s_vals))
 
-    # Grey (none/low)
+    # Grey / None
     if avg_s < 0.15:
         return "none", 20
 
@@ -140,6 +151,10 @@ def classify_fill(pixels):
     else:
         return "none", 20
 
+
+# ──────────────────────────────────────────────────────────────
+# DETECT ENDPOINT
+# ──────────────────────────────────────────────────────────────
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
@@ -161,7 +176,11 @@ def detect_disease_bars():
         disease_pages = find_disease_pages(doc)
 
         if not disease_pages:
-            return jsonify({"results": {}, "engine": "hsv_v12_final", "pages_found": 0})
+            return jsonify({
+                "results": {},
+                "engine": "hsv_v12_final",
+                "pages_found": 0
+            })
 
         results = {}
         page_images = []
@@ -176,9 +195,11 @@ def detect_disease_bars():
             row = i if i < 12 else i - 12
 
             if page_num >= len(page_images):
-                results[field] = {"risk_label": "none",
-                                  "progression_percent": 20,
-                                  "source": "hsv_v12_final"}
+                results[field] = {
+                    "risk_label": "none",
+                    "progression_percent": 20,
+                    "source": "hsv_v12_final"
+                }
                 continue
 
             bar_y = PAGE_Y_STARTS[row]
@@ -211,6 +232,10 @@ def detect_disease_bars():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+# ──────────────────────────────────────────────────────────────
+# CALIBRATION DISABLED
+# ──────────────────────────────────────────────────────────────
 
 @app.route("/v1/calibrate-disease-bars", methods=["POST"])
 def calibrate_disease_bars():
