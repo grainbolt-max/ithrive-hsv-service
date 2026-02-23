@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import fitz  # PyMuPDF
 import cv2
 import numpy as np
-import base64
 import os
 
 app = Flask(__name__)
@@ -10,19 +9,11 @@ app = Flask(__name__)
 ENGINE_VERSION = "hsv_v26_overlay_span_locked"
 API_KEY = "ithrive_secure_2026_key"
 
-# -----------------------------
-# HARD LOCKED CONFIG
-# -----------------------------
-
 ROWS_PER_PAGE = 14
 TOP_MARGIN_RATIO = 0.18
 BOTTOM_MARGIN_RATIO = 0.08
 LEFT_SAMPLE_RATIO = 0.15
 RIGHT_SAMPLE_RATIO = 0.95
-
-# HSV COLOR THRESHOLDS (LOCKED)
-# All bars have dark gray background.
-# We detect colored overlay by excluding dark gray.
 
 GRAY_LOW = np.array([0, 0, 40])
 GRAY_HIGH = np.array([180, 40, 160])
@@ -38,7 +29,6 @@ RED_HIGH_1 = np.array([10, 255, 255])
 RED_LOW_2 = np.array([170, 120, 150])
 RED_HIGH_2 = np.array([180, 255, 255])
 
-# Deterministic outputs
 COLOR_MAP = {
     "none": 20,
     "mild": 50,
@@ -47,7 +37,6 @@ COLOR_MAP = {
     "normal": 10
 }
 
-# Disease order LOCKED (headings excluded)
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
@@ -78,9 +67,6 @@ PAGE_2_DISEASES = [
     "cerebral_serotonin_decreased",
 ]
 
-# -----------------------------
-# UTILITIES
-# -----------------------------
 
 def classify_color(hsv_pixel):
     if cv2.inRange(hsv_pixel, YELLOW_LOW, YELLOW_HIGH):
@@ -92,20 +78,16 @@ def classify_color(hsv_pixel):
         return "severe"
     return "none"
 
+
 def is_gray(hsv_pixel):
     return cv2.inRange(hsv_pixel, GRAY_LOW, GRAY_HIGH)
 
-def process_row_overlay_span(row_img):
-    """
-    Detect colored overlay span horizontally.
-    Then sample center of detected span.
-    """
 
+def process_row_overlay_span(row_img):
     hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
     height, width, _ = hsv.shape
 
     sample_y = height // 2
-
     left_bound = int(width * LEFT_SAMPLE_RATIO)
     right_bound = int(width * RIGHT_SAMPLE_RATIO)
 
@@ -121,12 +103,11 @@ def process_row_overlay_span(row_img):
 
     span_left = min(overlay_pixels)
     span_right = max(overlay_pixels)
-
     center_x = (span_left + span_right) // 2
-
     center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
 
     return classify_color(center_pixel)
+
 
 def render_page_to_image(page):
     pix = page.get_pixmap(dpi=200)
@@ -139,13 +120,11 @@ def render_page_to_image(page):
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     return img
 
-# -----------------------------
-# ROUTES
-# -----------------------------
 
 @app.route("/")
 def home():
     return f"HSV Preprocess Service Running v26"
+
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
@@ -156,63 +135,49 @@ def detect_disease_bars():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
-    file = request.files["file"]
-    pdf_bytes = file.read()
-
+    pdf_bytes = request.files["file"].read()
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     results = {}
-
-    target_pages = min(len(doc), 10)
+    target_pages = min(len(doc), 2)
 
     for page_index in range(target_pages):
-
         page = doc.load_page(page_index)
         img = render_page_to_image(page)
 
         height = img.shape[0]
-        width = img.shape[1]
-
         top = int(height * TOP_MARGIN_RATIO)
         bottom = int(height * (1 - BOTTOM_MARGIN_RATIO))
-
         content = img[top:bottom, :]
 
         row_height = content.shape[0] // ROWS_PER_PAGE
 
         for row_index in range(ROWS_PER_PAGE):
 
+            if row_index in [0, 7]:
+                continue
+
             row_top = row_index * row_height
             row_bottom = row_top + row_height
             row_img = content[row_top:row_bottom, :]
 
-            # Skip headings (row 0 and row 7)
-            if row_index in [0, 7]:
-                continue
-
             if page_index == 0:
                 disease_list = PAGE_1_DISEASES
-                disease_index = row_index - (1 if row_index > 0 else 0)
-            elif page_index == 1:
-                disease_list = PAGE_2_DISEASES
-                disease_index = row_index - (1 if row_index > 0 else 0)
+                disease_index = row_index - 1
             else:
-                continue
+                disease_list = PAGE_2_DISEASES
+                disease_index = row_index - 1
 
-            if disease_index < 0 or disease_index >= len(disease_list):
-                continue
+            if 0 <= disease_index < len(disease_list):
+                key = disease_list[disease_index]
+                color_label = process_row_overlay_span(row_img)
+                progression = COLOR_MAP[color_label]
 
-            disease_key = disease_list[disease_index]
-
-            color_label = process_row_overlay_span(row_img)
-
-            progression = COLOR_MAP[color_label]
-
-            results[disease_key] = {
-                "progression_percent": progression,
-                "risk_label": color_label,
-                "source": ENGINE_VERSION
-            }
+                results[key] = {
+                    "progression_percent": progression,
+                    "risk_label": color_label,
+                    "source": ENGINE_VERSION
+                }
 
     return jsonify({
         "engine": ENGINE_VERSION,
