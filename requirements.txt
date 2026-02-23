@@ -1,4 +1,5 @@
 flask==3.0.2
 numpy==1.26.4
 opencv-python-headless==4.9.0.80
+pdf2image==1.17.0
 PyMuPDF==1.23.26
