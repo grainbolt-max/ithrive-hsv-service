@@ -1,12 +1,12 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
+import fitz
 import cv2
 import numpy as np
 import os
 
 app = Flask(__name__)
 
-ENGINE_VERSION = "hsv_v27_overlay_span_vertical_locked"
+ENGINE_VERSION = "hsv_v28_positive_color_span_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 ROWS_PER_PAGE = 14
@@ -15,19 +15,18 @@ BOTTOM_MARGIN_RATIO = 0.08
 LEFT_SAMPLE_RATIO = 0.15
 RIGHT_SAMPLE_RATIO = 0.95
 
-# HSV Ranges
-GRAY_LOW = np.array([0, 0, 40])
-GRAY_HIGH = np.array([180, 40, 160])
+# --- HSV COLOR RANGES ---
 
-YELLOW_LOW = np.array([15, 80, 150])
+YELLOW_LOW = np.array([15, 80, 140])
 YELLOW_HIGH = np.array([40, 255, 255])
 
-ORANGE_LOW = np.array([5, 120, 150])
+ORANGE_LOW = np.array([5, 120, 140])
 ORANGE_HIGH = np.array([20, 255, 255])
 
-RED_LOW_1 = np.array([0, 120, 150])
+RED_LOW_1 = np.array([0, 120, 140])
 RED_HIGH_1 = np.array([10, 255, 255])
-RED_LOW_2 = np.array([170, 120, 150])
+
+RED_LOW_2 = np.array([170, 120, 140])
 RED_HIGH_2 = np.array([180, 255, 255])
 
 COLOR_MAP = {
@@ -80,36 +79,37 @@ def classify_color(hsv_pixel):
     return "none"
 
 
-def is_gray(hsv_pixel):
-    return cv2.inRange(hsv_pixel, GRAY_LOW, GRAY_HIGH).any()
-
-
 def process_row_overlay_span(row_img):
     hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
     height, width, _ = hsv.shape
 
-    # 🔥 Vertical correction (bars sit lower than row center)
+    # Bars sit lower than row center
     sample_y = int(height * 0.65)
 
     left_bound = int(width * LEFT_SAMPLE_RATIO)
     right_bound = int(width * RIGHT_SAMPLE_RATIO)
 
-    overlay_pixels = []
+    colored_pixels = []
 
     for x in range(left_bound, right_bound):
         pixel = hsv[sample_y:sample_y+1, x:x+1]
-        if not is_gray(pixel):
-            overlay_pixels.append(x)
 
-    if not overlay_pixels:
+        if (
+            cv2.inRange(pixel, YELLOW_LOW, YELLOW_HIGH).any() or
+            cv2.inRange(pixel, ORANGE_LOW, ORANGE_HIGH).any() or
+            cv2.inRange(pixel, RED_LOW_1, RED_HIGH_1).any() or
+            cv2.inRange(pixel, RED_LOW_2, RED_HIGH_2).any()
+        ):
+            colored_pixels.append(x)
+
+    if not colored_pixels:
         return "none"
 
-    span_left = min(overlay_pixels)
-    span_right = max(overlay_pixels)
-
+    span_left = min(colored_pixels)
+    span_right = max(colored_pixels)
     center_x = (span_left + span_right) // 2
-    center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
 
+    center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
     return classify_color(center_pixel)
 
 
@@ -118,16 +118,18 @@ def render_page_to_image(page):
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
         pix.height, pix.width, pix.n
     )
+
     if pix.n == 4:
         img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
     else:
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
     return img
 
 
 @app.route("/")
 def home():
-    return f"HSV Preprocess Service Running v27"
+    return "HSV Preprocess Service Running v28"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -146,14 +148,15 @@ def detect_disease_bars():
     target_pages = min(len(doc), 2)
 
     for page_index in range(target_pages):
+
         page = doc.load_page(page_index)
         img = render_page_to_image(page)
 
         height = img.shape[0]
         top = int(height * TOP_MARGIN_RATIO)
         bottom = int(height * (1 - BOTTOM_MARGIN_RATIO))
-        content = img[top:bottom, :]
 
+        content = img[top:bottom, :]
         row_height = content.shape[0] // ROWS_PER_PAGE
 
         for row_index in range(ROWS_PER_PAGE):
