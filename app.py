@@ -8,46 +8,47 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v18_deterministic"
+ENGINE_NAME = "hsv_v19_locked"
 
-# =====================================================
-# LOCKED VERTICAL ANCHORS (Based on your screenshots)
-# Values are ratios of full page height
-# =====================================================
+# ======================================================
+# Anchors relative to disease score column crop (0–1)
+# These are calibrated for your template layout.
+# ======================================================
 
 PAGE_1_ANCHORS = {
-    "large_artery_stiffness": 0.32,
-    "peripheral_vessels": 0.36,
-    "blood_glucose_uncontrolled": 0.40,
-    "small_medium_artery_stiffness": 0.44,
-    "atherosclerosis": 0.48,
-    "ldl_cholesterol": 0.52,
-    "lv_hypertrophy": 0.56,
-    "metabolic_syndrome": 0.62,
-    "insulin_resistance": 0.66,
-    "beta_cell_function_decreased": 0.70,
-    "tissue_inflammatory_process": 0.74,
+    "large_artery_stiffness": 0.12,
+    "peripheral_vessels": 0.16,
+    "blood_glucose_uncontrolled": 0.20,
+    "small_medium_artery_stiffness": 0.24,
+    "atherosclerosis": 0.28,
+    "ldl_cholesterol": 0.32,
+    "lv_hypertrophy": 0.36,
+    "metabolic_syndrome": 0.44,
+    "insulin_resistance": 0.48,
+    "beta_cell_function_decreased": 0.52,
+    "tissue_inflammatory_process": 0.56,
 }
 
 PAGE_2_ANCHORS = {
-    "hypothyroidism": 0.28,
-    "hyperthyroidism": 0.32,
-    "hepatic_fibrosis": 0.36,
-    "chronic_hepatitis": 0.40,
-    "respiratory": 0.48,
-    "kidney_function": 0.52,
-    "digestive_disorders": 0.56,
-    "major_depression": 0.64,
-    "adhd_children_learning": 0.68,
-    "cerebral_dopamine_decreased": 0.72,
-    "cerebral_serotonin_decreased": 0.76,
+    "hypothyroidism": 0.10,
+    "hyperthyroidism": 0.14,
+    "hepatic_fibrosis": 0.18,
+    "chronic_hepatitis": 0.22,
+    "respiratory": 0.30,
+    "kidney_function": 0.34,
+    "digestive_disorders": 0.38,
+    "major_depression": 0.46,
+    "adhd_children_learning": 0.50,
+    "cerebral_dopamine_decreased": 0.54,
+    "cerebral_serotonin_decreased": 0.58,
 }
 
 ALL_KEYS = set(PAGE_1_ANCHORS.keys()) | set(PAGE_2_ANCHORS.keys())
 
+
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v18", 200
+    return "HSV Preprocess Service Running v19", 200
 
 
 def classify_bar(hsv_crop):
@@ -73,6 +74,7 @@ def classify_bar(hsv_crop):
 def process_page(image, anchor_map):
     h, w, _ = image.shape
 
+    # Disease Score column crop (locked)
     x1 = int(w * 0.48)
     x2 = int(w * 0.85)
     y1 = int(h * 0.18)
@@ -80,8 +82,8 @@ def process_page(image, anchor_map):
 
     col = image[y1:y2, x1:x2]
     hsv = cv2.cvtColor(col, cv2.COLOR_BGR2HSV)
-    sat = hsv[:, :, 1]
 
+    sat = hsv[:, :, 1]
     row_strength = np.mean(sat, axis=1)
     mask = row_strength > 25
 
@@ -100,13 +102,12 @@ def process_page(image, anchor_map):
         segments.append((start, len(mask)))
 
     results = {}
+    crop_height = y2 - y1
 
     for seg in segments:
-        mid_local = (seg[0] + seg[1]) // 2
-        mid_absolute = y1 + mid_local
-        mid_ratio = mid_absolute / h
+        mid = (seg[0] + seg[1]) // 2
+        mid_ratio = mid / crop_height  # now relative to crop only
 
-        # find closest anchor
         closest_key = None
         closest_dist = 999
 
