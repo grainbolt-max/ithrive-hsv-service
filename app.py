@@ -1,43 +1,22 @@
-from flask import Flask, request, jsonify
-import fitz
-import cv2
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException
+from fastapi.responses import JSONResponse
+from pdf2image import convert_from_bytes
 import numpy as np
-import os
+import cv2
+import io
 
-app = Flask(__name__)
+app = FastAPI()
 
-ENGINE_VERSION = "hsv_v28_positive_color_span_locked"
+ENGINE_NAME = "hsv_v29_geometry_left_span_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 ROWS_PER_PAGE = 14
-TOP_MARGIN_RATIO = 0.18
-BOTTOM_MARGIN_RATIO = 0.08
-LEFT_SAMPLE_RATIO = 0.15
-RIGHT_SAMPLE_RATIO = 0.95
 
-# --- HSV COLOR RANGES ---
+# Row indexes (0-based)
+PAGE1_HEADING_ROWS = {0, 8}
+PAGE2_HEADING_ROWS = {0, 8}
 
-YELLOW_LOW = np.array([15, 80, 140])
-YELLOW_HIGH = np.array([40, 255, 255])
-
-ORANGE_LOW = np.array([5, 120, 140])
-ORANGE_HIGH = np.array([20, 255, 255])
-
-RED_LOW_1 = np.array([0, 120, 140])
-RED_HIGH_1 = np.array([10, 255, 255])
-
-RED_LOW_2 = np.array([170, 120, 140])
-RED_HIGH_2 = np.array([180, 255, 255])
-
-COLOR_MAP = {
-    "none": 20,
-    "mild": 50,
-    "moderate": 70,
-    "severe": 85,
-    "normal": 10
-}
-
-PAGE_1_DISEASES = [
+PAGE1_DISEASE_KEYS = [
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -52,7 +31,7 @@ PAGE_1_DISEASES = [
     "tissue_inflammatory_process",
 ]
 
-PAGE_2_DISEASES = [
+PAGE2_DISEASE_KEYS = [
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -67,133 +46,131 @@ PAGE_2_DISEASES = [
     "cerebral_serotonin_decreased",
 ]
 
-
-def classify_color(hsv_pixel):
-    if cv2.inRange(hsv_pixel, YELLOW_LOW, YELLOW_HIGH).any():
-        return "mild"
-    if cv2.inRange(hsv_pixel, ORANGE_LOW, ORANGE_HIGH).any():
-        return "moderate"
-    if (cv2.inRange(hsv_pixel, RED_LOW_1, RED_HIGH_1).any() or
-        cv2.inRange(hsv_pixel, RED_LOW_2, RED_HIGH_2).any()):
-        return "severe"
-    return "none"
-
-
-def process_row_overlay_span(row_img):
-    hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
-    height, width, _ = hsv.shape
-
-    # Bars sit lower than row center
-    sample_y = int(height * 0.65)
-
-    left_bound = int(width * LEFT_SAMPLE_RATIO)
-    right_bound = int(width * RIGHT_SAMPLE_RATIO)
-
-    colored_pixels = []
-
-    for x in range(left_bound, right_bound):
-        pixel = hsv[sample_y:sample_y+1, x:x+1]
-
-        if (
-            cv2.inRange(pixel, YELLOW_LOW, YELLOW_HIGH).any() or
-            cv2.inRange(pixel, ORANGE_LOW, ORANGE_HIGH).any() or
-            cv2.inRange(pixel, RED_LOW_1, RED_HIGH_1).any() or
-            cv2.inRange(pixel, RED_LOW_2, RED_HIGH_2).any()
-        ):
-            colored_pixels.append(x)
-
-    if not colored_pixels:
+def map_percent_to_label(percent):
+    if percent <= 10:
+        return "normal"
+    elif percent <= 20:
         return "none"
-
-    span_left = min(colored_pixels)
-    span_right = max(colored_pixels)
-    center_x = (span_left + span_right) // 2
-
-    center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
-    return classify_color(center_pixel)
-
-
-def render_page_to_image(page):
-    pix = page.get_pixmap(dpi=200)
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-        pix.height, pix.width, pix.n
-    )
-
-    if pix.n == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    elif percent <= 50:
+        return "mild"
+    elif percent <= 75:
+        return "moderate"
     else:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        return "severe"
 
-    return img
+def detect_overlay_span(row_img):
+    """
+    Detect colored overlay width inside a single disease row.
+    Overlay is left-aligned.
+    """
 
+    height, width, _ = row_img.shape
 
-@app.route("/")
-def home():
-    return "HSV Preprocess Service Running v28"
+    # Only scan middle vertical band (ignore top/bottom padding)
+    y1 = int(height * 0.25)
+    y2 = int(height * 0.75)
+    scan = row_img[y1:y2, :]
 
+    # Convert to HSV
+    hsv = cv2.cvtColor(scan, cv2.COLOR_BGR2HSV)
 
-@app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect_disease_bars():
+    # Define color ranges (striped colors)
+    masks = []
 
-    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
-        return jsonify({"error": "Unauthorized"}), 401
+    # Yellow
+    masks.append(cv2.inRange(hsv, (20, 80, 80), (35, 255, 255)))
 
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+    # Orange
+    masks.append(cv2.inRange(hsv, (10, 100, 100), (20, 255, 255)))
 
-    pdf_bytes = request.files["file"].read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    # Red
+    masks.append(cv2.inRange(hsv, (0, 100, 100), (10, 255, 255)))
+
+    # Neutral light gray (striped)
+    masks.append(cv2.inRange(hsv, (0, 0, 160), (180, 40, 255)))
+
+    combined = masks[0]
+    for m in masks[1:]:
+        combined = cv2.bitwise_or(combined, m)
+
+    # Sum mask vertically to find span
+    column_sum = np.sum(combined, axis=0)
+
+    # Threshold to determine if column contains overlay
+    threshold = np.max(column_sum) * 0.3
+    overlay_columns = np.where(column_sum > threshold)[0]
+
+    if len(overlay_columns) == 0:
+        return 20  # fallback baseline
+
+    left = overlay_columns[0]
+    right = overlay_columns[-1]
+
+    span_ratio = (right - left) / width
+    percent = int(round(span_ratio * 100 / 10) * 10)
+
+    if percent < 10:
+        percent = 10
+    if percent > 100:
+        percent = 100
+
+    return percent
+
+@app.post("/v1/detect-disease-bars")
+async def detect_disease_bars(
+    file: UploadFile = File(...),
+    authorization: str = Header(None)
+):
+
+    if authorization != f"Bearer {API_KEY}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    pdf_bytes = await file.read()
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     results = {}
-    target_pages = min(len(doc), 2)
 
-    for page_index in range(target_pages):
+    # We only process first 2 relevant pages
+    relevant_pages = pages[:2]
 
-        page = doc.load_page(page_index)
-        img = render_page_to_image(page)
+    for page_index, page in enumerate(relevant_pages):
 
-        height = img.shape[0]
-        top = int(height * TOP_MARGIN_RATIO)
-        bottom = int(height * (1 - BOTTOM_MARGIN_RATIO))
+        img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        content = img[top:bottom, :]
-        row_height = content.shape[0] // ROWS_PER_PAGE
+        height, width, _ = img.shape
+        row_height = height // ROWS_PER_PAGE
+
+        disease_row_counter = 0
 
         for row_index in range(ROWS_PER_PAGE):
 
+            y1 = row_index * row_height
+            y2 = (row_index + 1) * row_height
+            row_img = img[y1:y2, :]
+
             # Skip headings
-            if row_index in [0, 7]:
+            if page_index == 0 and row_index in PAGE1_HEADING_ROWS:
+                continue
+            if page_index == 1 and row_index in PAGE2_HEADING_ROWS:
                 continue
 
-            row_top = row_index * row_height
-            row_bottom = row_top + row_height
-            row_img = content[row_top:row_bottom, :]
-
             if page_index == 0:
-                disease_list = PAGE_1_DISEASES
-                disease_index = row_index - 1
+                disease_key = PAGE1_DISEASE_KEYS[disease_row_counter]
             else:
-                disease_list = PAGE_2_DISEASES
-                disease_index = row_index - 1
+                disease_key = PAGE2_DISEASE_KEYS[disease_row_counter]
 
-            if 0 <= disease_index < len(disease_list):
-                key = disease_list[disease_index]
-                color_label = process_row_overlay_span(row_img)
-                progression = COLOR_MAP[color_label]
+            percent = detect_overlay_span(row_img)
 
-                results[key] = {
-                    "progression_percent": progression,
-                    "risk_label": color_label,
-                    "source": ENGINE_VERSION
-                }
+            results[disease_key] = {
+                "progression_percent": percent,
+                "risk_label": map_percent_to_label(percent),
+                "source": ENGINE_NAME
+            }
 
-    return jsonify({
-        "engine": ENGINE_VERSION,
-        "pages_found": target_pages,
+            disease_row_counter += 1
+
+    return JSONResponse({
+        "engine": ENGINE_NAME,
+        "pages_found": 2,
         "results": results
     })
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
