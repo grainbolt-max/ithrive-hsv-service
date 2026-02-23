@@ -8,7 +8,7 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v24_geometry_locked"
+ENGINE_NAME = "hsv_v25_geometry_center_locked"
 
 
 # =========================================================
@@ -54,45 +54,50 @@ ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v24", 200
+    return "HSV Preprocess Service Running v25", 200
 
 
 # =========================================================
-# FIXED GEOMETRY ROW EXTRACTION
+# FIXED GEOMETRY + CENTER SAMPLING
 # =========================================================
 
-def extract_rows_geometry_locked(image, disease_keys):
+def extract_rows_geometry_center_locked(image, disease_keys):
     h, w, _ = image.shape
 
-    # Fixed score column crop (template-specific)
+    # Fixed score column crop (template locked)
     x1 = int(w * 0.48)
     x2 = int(w * 0.85)
     y1 = int(h * 0.20)
     y2 = int(h * 0.88)
 
     col = image[y1:y2, x1:x2]
-    col_h = col.shape[0]
+    col_h, col_w = col.shape[:2]
 
-    # Template has 14 total rows:
-    # Row 0 = Heading
-    # Rows 1–12 = Diseases
-    # Row 13 = Section break (ignored)
-
-    total_rows = 14
+    total_rows = 14  # 1 heading + 12 diseases + 1 section gap
     row_height = col_h // total_rows
 
     results = {}
 
     for i, key in enumerate(disease_keys):
-        # Disease rows are index 1–12
-        row_index = i + 1
+        row_index = i + 1  # skip heading row (row 0)
 
         top = row_index * row_height
         bottom = (row_index + 1) * row_height
 
         row_crop = col[top:bottom, :]
 
-        label, percent = classify_color(row_crop)
+        # CENTER SAMPLE WINDOW (deterministic)
+        rh, rw = row_crop.shape[:2]
+
+        cy1 = int(rh * 0.25)
+        cy2 = int(rh * 0.75)
+
+        cx1 = int(rw * 0.30)
+        cx2 = int(rw * 0.70)
+
+        center_crop = row_crop[cy1:cy2, cx1:cx2]
+
+        label, percent = classify_color(center_crop)
 
         results[key] = {
             "progression_percent": percent,
@@ -104,7 +109,7 @@ def extract_rows_geometry_locked(image, disease_keys):
 
 
 # =========================================================
-# COLOR CLASSIFICATION (DIRECT HSV)
+# COLOR CLASSIFICATION (STRICT SATURATION FILTER)
 # =========================================================
 
 def classify_color(bgr_crop):
@@ -112,8 +117,8 @@ def classify_color(bgr_crop):
     hue = hsv[:, :, 0]
     sat = hsv[:, :, 1]
 
-    # Ignore low saturation (dark gray background)
-    mask = sat > 25
+    # Remove dark gray background
+    mask = sat > 40
 
     if np.sum(mask) == 0:
         return "none", 20
@@ -152,13 +157,13 @@ def detect():
 
         if len(pages) >= 1:
             img1 = cv2.cvtColor(np.array(pages[0]), cv2.COLOR_RGB2BGR)
-            results.update(extract_rows_geometry_locked(img1, PAGE_1_KEYS))
+            results.update(extract_rows_geometry_center_locked(img1, PAGE_1_KEYS))
 
         if len(pages) >= 2:
             img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
-            results.update(extract_rows_geometry_locked(img2, PAGE_2_KEYS))
+            results.update(extract_rows_geometry_center_locked(img2, PAGE_2_KEYS))
 
-        # Hard fill missing keys deterministically
+        # Deterministic safeguard fill
         for key in ALL_KEYS:
             if key not in results:
                 results[key] = {
