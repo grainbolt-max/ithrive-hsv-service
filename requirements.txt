@@ -1,5 +1,6 @@
-Flask==3.0.2
-pdfplumber==0.10.3
-gunicorn==23.0.0
-pdf2image
-pytesseract
+flask==3.0.2
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+Pillow==10.2.0
+PyMuPDF==1.23.9
+gunicorn==21.2.0
