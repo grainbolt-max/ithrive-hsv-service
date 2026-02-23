@@ -6,7 +6,7 @@ import os
 
 app = Flask(__name__)
 
-ENGINE_VERSION = "hsv_v26_overlay_span_locked"
+ENGINE_VERSION = "hsv_v27_overlay_span_vertical_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 ROWS_PER_PAGE = 14
@@ -15,6 +15,7 @@ BOTTOM_MARGIN_RATIO = 0.08
 LEFT_SAMPLE_RATIO = 0.15
 RIGHT_SAMPLE_RATIO = 0.95
 
+# HSV Ranges
 GRAY_LOW = np.array([0, 0, 40])
 GRAY_HIGH = np.array([180, 40, 160])
 
@@ -69,25 +70,27 @@ PAGE_2_DISEASES = [
 
 
 def classify_color(hsv_pixel):
-    if cv2.inRange(hsv_pixel, YELLOW_LOW, YELLOW_HIGH):
+    if cv2.inRange(hsv_pixel, YELLOW_LOW, YELLOW_HIGH).any():
         return "mild"
-    if cv2.inRange(hsv_pixel, ORANGE_LOW, ORANGE_HIGH):
+    if cv2.inRange(hsv_pixel, ORANGE_LOW, ORANGE_HIGH).any():
         return "moderate"
-    if (cv2.inRange(hsv_pixel, RED_LOW_1, RED_HIGH_1) or
-        cv2.inRange(hsv_pixel, RED_LOW_2, RED_HIGH_2)):
+    if (cv2.inRange(hsv_pixel, RED_LOW_1, RED_HIGH_1).any() or
+        cv2.inRange(hsv_pixel, RED_LOW_2, RED_HIGH_2).any()):
         return "severe"
     return "none"
 
 
 def is_gray(hsv_pixel):
-    return cv2.inRange(hsv_pixel, GRAY_LOW, GRAY_HIGH)
+    return cv2.inRange(hsv_pixel, GRAY_LOW, GRAY_HIGH).any()
 
 
 def process_row_overlay_span(row_img):
     hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
     height, width, _ = hsv.shape
 
-    sample_y = height // 2
+    # 🔥 Vertical correction (bars sit lower than row center)
+    sample_y = int(height * 0.65)
+
     left_bound = int(width * LEFT_SAMPLE_RATIO)
     right_bound = int(width * RIGHT_SAMPLE_RATIO)
 
@@ -103,6 +106,7 @@ def process_row_overlay_span(row_img):
 
     span_left = min(overlay_pixels)
     span_right = max(overlay_pixels)
+
     center_x = (span_left + span_right) // 2
     center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
 
@@ -123,7 +127,7 @@ def render_page_to_image(page):
 
 @app.route("/")
 def home():
-    return f"HSV Preprocess Service Running v26"
+    return f"HSV Preprocess Service Running v27"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -154,6 +158,7 @@ def detect_disease_bars():
 
         for row_index in range(ROWS_PER_PAGE):
 
+            # Skip headings
             if row_index in [0, 7]:
                 continue
 
