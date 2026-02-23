@@ -8,7 +8,7 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v22_stripe_locked"
+ENGINE_NAME = "hsv_v23_variance_locked"
 
 # =========================
 # FIXED DISEASE ORDER
@@ -53,35 +53,30 @@ ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v22", 200
+    return "HSV Preprocess Service Running v23", 200
 
 
 # =========================
-# STRIPE SEGMENT DETECTION
+# STRIPE SEGMENT DETECTION (Variance-Based)
 # =========================
 
 def detect_stripe_segments(image):
     h, w, _ = image.shape
 
-    # Crop the disease score column
+    # Crop score column region
     x1 = int(w * 0.48)
     x2 = int(w * 0.85)
     y1 = int(h * 0.18)
     y2 = int(h * 0.88)
 
     col = image[y1:y2, x1:x2]
-
     gray = cv2.cvtColor(col, cv2.COLOR_BGR2GRAY)
 
-    # Detect vertical stripe texture using Sobel X
-    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-    edge_strength = np.abs(sobelx)
+    # Stripe rows have higher brightness variance
+    row_variance = np.std(gray, axis=1)
 
-    # Average vertical edge energy per row
-    row_energy = np.mean(edge_strength, axis=1)
-
-    # LOWERED threshold (was 12)
-    mask = row_energy > 5
+    # Threshold tuned for striped pattern
+    mask = row_variance > 8
 
     segments = []
     start = None
@@ -97,9 +92,7 @@ def detect_stripe_segments(image):
     if start is not None:
         segments.append((start, len(mask)))
 
-    # Sort top → bottom
     segments = sorted(segments, key=lambda x: x[0])
-
     return col, segments
 
 
@@ -112,7 +105,6 @@ def classify_color(bgr_crop):
     hue = hsv[:, :, 0]
     sat = hsv[:, :, 1]
 
-    # Ignore very low saturation pixels (pure gray background)
     mask = sat > 20
     if np.sum(mask) == 0:
         return "none", 20
@@ -145,7 +137,6 @@ def process_page(image, key_order):
             break
 
         key = key_order[idx]
-
         crop = col[seg[0]:seg[1], :]
         label, percent = classify_color(crop)
 
@@ -184,7 +175,7 @@ def detect():
             img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
             results.update(process_page(img2, PAGE_2_KEYS))
 
-        # Fill any missing diseases as none
+        # Fill missing keys deterministically
         for key in ALL_KEYS:
             if key not in results:
                 results[key] = {
