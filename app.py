@@ -1,7 +1,5 @@
 import os
-import re
 import io
-import base64
 import traceback
 import numpy as np
 import cv2
@@ -18,11 +16,11 @@ API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v12", 200
+    return "HSV Preprocess Service Running v13", 200
 
 
 # ═══════════════════════════════════════════════════════════════
-# DISEASE ENGINE v12 — SOLID FILL SATURATION DROP ISOLATION
+# DISEASE ENGINE v13 — LAST 2 PAGES + SOLID FILL ISOLATION
 # ═══════════════════════════════════════════════════════════════
 
 DISEASE_FIELDS_ORDERED = [
@@ -63,20 +61,18 @@ PAGE_Y_STARTS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# BROAD PAGE DETECTION (FIXED)
+# DETERMINISTIC PAGE SELECTION
 # ──────────────────────────────────────────────────────────────
 
 def find_disease_pages(doc):
-    pages = []
-    for i, page in enumerate(doc):
-        text = page.get_text().lower()
-        if "disease" in text and "screening" in text:
-            pages.append(i)
-    return pages
+    total_pages = len(doc)
+    if total_pages >= 2:
+        return [total_pages - 2, total_pages - 1]
+    return []
 
 
 # ──────────────────────────────────────────────────────────────
-# SOLID FILL ISOLATION
+# SOLID FILL ISOLATION (IGNORE GRADIENT TAIL)
 # ──────────────────────────────────────────────────────────────
 
 def isolate_solid_fill(page_img, x, y, w, h):
@@ -137,11 +133,11 @@ def classify_fill(pixels):
     avg_h = float(np.mean(h_vals))
     avg_s = float(np.mean(s_vals))
 
-    # Grey / None
+    # Grey = None
     if avg_s < 0.15:
         return "none", 20
 
-    # Calibrated hue bands for your PDF palette
+    # Calibrated hue bands
     if avg_h < 10:
         return "severe", 85
     elif 10 <= avg_h < 25:
@@ -173,19 +169,20 @@ def detect_disease_bars():
     try:
         import fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
         disease_pages = find_disease_pages(doc)
 
         if not disease_pages:
             return jsonify({
                 "results": {},
-                "engine": "hsv_v12_final",
+                "engine": "hsv_v13_final",
                 "pages_found": 0
             })
 
         results = {}
         page_images = []
 
-        for idx in disease_pages[:2]:
+        for idx in disease_pages:
             pix = doc[idx].get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             page_images.append(np.array(img))
@@ -198,7 +195,7 @@ def detect_disease_bars():
                 results[field] = {
                     "risk_label": "none",
                     "progression_percent": 20,
-                    "source": "hsv_v12_final"
+                    "source": "hsv_v13_final"
                 }
                 continue
 
@@ -217,29 +214,20 @@ def detect_disease_bars():
             results[field] = {
                 "risk_label": label,
                 "progression_percent": pct,
-                "source": "hsv_v12_final"
+                "source": "hsv_v13_final"
             }
 
         doc.close()
 
         return jsonify({
             "results": results,
-            "engine": "hsv_v12_final",
+            "engine": "hsv_v13_final",
             "pages_found": len(disease_pages)
         })
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
-# ──────────────────────────────────────────────────────────────
-# CALIBRATION DISABLED
-# ──────────────────────────────────────────────────────────────
-
-@app.route("/v1/calibrate-disease-bars", methods=["POST"])
-def calibrate_disease_bars():
-    return jsonify({"message": "Calibration disabled in v12"})
 
 
 if __name__ == "__main__":
