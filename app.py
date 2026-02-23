@@ -1,27 +1,33 @@
-# ==============================
-# v31.1 STRICT SATURATION SPAN LOCKED (PyMuPDF)
-# ==============================
+# ============================================
+# v32 STRICT SATURATION SPAN LOCKED (CALIBRATED)
+# PyMuPDF @ 300 DPI
+# ============================================
 
-import fitz  # PyMuPDF
+import fitz
 import cv2
 import numpy as np
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v31_1_strict_saturation_span_locked"
+ENGINE_NAME = "hsv_v32_strict_saturation_span_calibrated"
 AUTH_KEY = "ithrive_secure_2026_key"
+
+# ----------------------------
+# DETECTION CONFIG
+# ----------------------------
 
 SATURATION_THRESHOLD = 50
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
-BAR_HEIGHT = 28
 
-ROW_START_Y = 420
-ROW_GAP = 42
+BAR_HEIGHT = 26          # slightly reduced
+ROW_START_Y = 455        # shifted down
+ROW_GAP = 44             # slightly increased
 
 DISEASE_ORDER = [
+    # Page 1
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -34,6 +40,8 @@ DISEASE_ORDER = [
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
     "tissue_inflammatory_process",
+
+    # Page 2
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -49,6 +57,10 @@ DISEASE_ORDER = [
 ]
 
 
+# ----------------------------
+# RISK MAPPING
+# ----------------------------
+
 def risk_label_from_percent(p):
     if p >= 75:
         return "severe"
@@ -62,6 +74,10 @@ def risk_label_from_percent(p):
         return "none"
 
 
+# ----------------------------
+# BAR ANALYSIS
+# ----------------------------
+
 def analyze_bar(image, row_index):
     y1 = ROW_START_Y + (row_index * ROW_GAP)
     y2 = y1 + BAR_HEIGHT
@@ -72,8 +88,8 @@ def analyze_bar(image, row_index):
         return 0
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
     s_channel = hsv[:, :, 1]
+
     mask = s_channel > SATURATION_THRESHOLD
 
     cols = np.where(np.any(mask, axis=0))[0]
@@ -87,9 +103,13 @@ def analyze_bar(image, row_index):
     return percent
 
 
+# ----------------------------
+# ROUTES
+# ----------------------------
+
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v31.1"
+    return "HSV Preprocess Service Running v32"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -101,10 +121,10 @@ def detect():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    file = request.files["file"].read()
+    file_bytes = request.files["file"].read()
 
     try:
-        doc = fitz.open(stream=file, filetype="pdf")
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
     except:
         return jsonify({"error": "PDF open failed"}), 500
 
@@ -114,7 +134,9 @@ def detect():
     for page_number in range(min(2, len(doc))):
         page = doc.load_page(page_number)
         pix = page.get_pixmap(dpi=300)
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+
+        img = np.frombuffer(pix.samples, dtype=np.uint8)
+        img = img.reshape(pix.height, pix.width, pix.n)
 
         if pix.n == 4:
             img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
