@@ -1,5 +1,3 @@
-import base64
-import io
 import os
 import fitz  # PyMuPDF
 import cv2
@@ -8,12 +6,12 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_VERSION = "hsv_v30_strict_isolate_locked"
+ENGINE_VERSION = "hsv_v30_1_strict_isolate_rgba_safe"
 AUTH_KEY = "ithrive_secure_2026_key"
 
-# ================================
-# Disease Order (Exact Row Order)
-# ================================
+# =====================================
+# DISEASE ORDER (EXACT ROW ORDER)
+# =====================================
 
 PAGE_1 = [
     "large_artery_stiffness",
@@ -45,10 +43,8 @@ PAGE_2 = [
     "cerebral_serotonin_decreased"
 ]
 
-ALL_DISEASES = PAGE_1 + PAGE_2
-
 # =====================================
-# HSV STRICT COLOR ISOLATION
+# STRICT HSV COLOR ISOLATION
 # =====================================
 
 def positive_color_mask(hsv):
@@ -56,43 +52,31 @@ def positive_color_mask(hsv):
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
 
-    # -------------------------
-    # Exclude dark gray background
-    # Dark gray has LOW brightness
-    # -------------------------
+    # Exclude dark gray background (low brightness)
     bright = v > 120
 
-    # -------------------------
     # Yellow
-    # -------------------------
     yellow = (
         (h >= 18) & (h <= 35) &
         (s > 80) &
         bright
     )
 
-    # -------------------------
     # Orange
-    # -------------------------
     orange = (
         (h >= 8) & (h < 18) &
         (s > 100) &
         bright
     )
 
-    # -------------------------
     # Red
-    # -------------------------
     red = (
         ((h <= 6) | (h >= 170)) &
         (s > 120) &
         bright
     )
 
-    # -------------------------
-    # Light Neutral Gray (None/Low)
-    # Low saturation, HIGH brightness
-    # -------------------------
+    # Light neutral gray (striped "none/low")
     neutral_light = (
         (s < 40) &
         (v > 170)
@@ -103,7 +87,7 @@ def positive_color_mask(hsv):
 
 
 # =====================================
-# Span Detection
+# SPAN DETECTION
 # =====================================
 
 def detect_span_percent(crop):
@@ -112,10 +96,7 @@ def detect_span_percent(crop):
 
     height, width = mask.shape
 
-    # Collapse vertically (if ANY pixel in column is positive)
     col_has_color = np.any(mask > 0, axis=0)
-
-    # Find last colored column from left
     colored_indices = np.where(col_has_color)[0]
 
     if len(colored_indices) == 0:
@@ -128,7 +109,7 @@ def detect_span_percent(crop):
 
 
 # =====================================
-# Risk Label
+# RISK LABEL MAPPING
 # =====================================
 
 def risk_from_percent(p):
@@ -145,36 +126,44 @@ def risk_from_percent(p):
 
 
 # =====================================
-# PDF Processing
+# PDF PROCESSING
 # =====================================
+
+def render_page(page):
+    pix = page.get_pixmap(dpi=200)
+    img = np.frombuffer(pix.samples, dtype=np.uint8)
+    img = img.reshape(pix.height, pix.width, pix.n)
+
+    # RGBA SAFE CONVERSION
+    if pix.n == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    else:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    return img
+
 
 def process_pdf(file_stream):
     results = {}
-
     doc = fitz.open(stream=file_stream.read(), filetype="pdf")
     pages_found = len(doc)
 
-    # Hard geometry crop region for bars
-    # Adjust if needed once stable
+    # Hard geometry lock (adjust if needed)
     X_START = 900
     X_END = 1700
 
-    Y_START_PAGE1 = 700
+    Y_START = 700
     ROW_HEIGHT = 90
     ROW_SPACING = 95
 
     # PAGE 1
-    page1 = doc[0]
-    pix1 = page1.get_pixmap()
-    img1 = np.frombuffer(pix1.samples, dtype=np.uint8)
-    img1 = img1.reshape(pix1.height, pix1.width, pix1.n)
+    img1 = render_page(doc[0])
 
     for i, disease in enumerate(PAGE_1):
-        y1 = Y_START_PAGE1 + i * ROW_SPACING
+        y1 = Y_START + i * ROW_SPACING
         y2 = y1 + ROW_HEIGHT
 
         crop = img1[y1:y2, X_START:X_END]
-
         percent = detect_span_percent(crop)
         label = risk_from_percent(percent)
 
@@ -185,19 +174,13 @@ def process_pdf(file_stream):
         }
 
     # PAGE 2
-    page2 = doc[1]
-    pix2 = page2.get_pixmap()
-    img2 = np.frombuffer(pix2.samples, dtype=np.uint8)
-    img2 = img2.reshape(pix2.height, pix2.width, pix2.n)
-
-    Y_START_PAGE2 = 700
+    img2 = render_page(doc[1])
 
     for i, disease in enumerate(PAGE_2):
-        y1 = Y_START_PAGE2 + i * ROW_SPACING
+        y1 = Y_START + i * ROW_SPACING
         y2 = y1 + ROW_HEIGHT
 
         crop = img2[y1:y2, X_START:X_END]
-
         percent = detect_span_percent(crop)
         label = risk_from_percent(percent)
 
@@ -211,12 +194,13 @@ def process_pdf(file_stream):
 
 
 # =====================================
-# Routes
+# ROUTES
 # =====================================
 
 @app.route("/", methods=["GET"])
 def root():
-    return f"HSV Preprocess Service Running v30"
+    return "HSV Preprocess Service Running v30.1"
+
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -229,7 +213,10 @@ def detect():
 
     file = request.files["file"]
 
-    results, pages_found = process_pdf(file)
+    try:
+        results, pages_found = process_pdf(file)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     return jsonify({
         "engine": ENGINE_VERSION,
