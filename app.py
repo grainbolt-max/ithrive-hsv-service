@@ -1,21 +1,54 @@
-import os
-import traceback
-import numpy as np
-import cv2
 from flask import Flask, request, jsonify
-from pdf2image import convert_from_bytes
+import fitz  # PyMuPDF
+import cv2
+import numpy as np
+import base64
+import os
 
 app = Flask(__name__)
 
-API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v25_geometry_center_locked"
+ENGINE_VERSION = "hsv_v26_overlay_span_locked"
+API_KEY = "ithrive_secure_2026_key"
 
+# -----------------------------
+# HARD LOCKED CONFIG
+# -----------------------------
 
-# =========================================================
-# FIXED DISEASE ORDER (STRICT TEMPLATE MATCH)
-# =========================================================
+ROWS_PER_PAGE = 14
+TOP_MARGIN_RATIO = 0.18
+BOTTOM_MARGIN_RATIO = 0.08
+LEFT_SAMPLE_RATIO = 0.15
+RIGHT_SAMPLE_RATIO = 0.95
 
-PAGE_1_KEYS = [
+# HSV COLOR THRESHOLDS (LOCKED)
+# All bars have dark gray background.
+# We detect colored overlay by excluding dark gray.
+
+GRAY_LOW = np.array([0, 0, 40])
+GRAY_HIGH = np.array([180, 40, 160])
+
+YELLOW_LOW = np.array([15, 80, 150])
+YELLOW_HIGH = np.array([40, 255, 255])
+
+ORANGE_LOW = np.array([5, 120, 150])
+ORANGE_HIGH = np.array([20, 255, 255])
+
+RED_LOW_1 = np.array([0, 120, 150])
+RED_HIGH_1 = np.array([10, 255, 255])
+RED_LOW_2 = np.array([170, 120, 150])
+RED_HIGH_2 = np.array([180, 255, 255])
+
+# Deterministic outputs
+COLOR_MAP = {
+    "none": 20,
+    "mild": 50,
+    "moderate": 70,
+    "severe": 85,
+    "normal": 10
+}
+
+# Disease order LOCKED (headings excluded)
+PAGE_1_DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -30,7 +63,7 @@ PAGE_1_KEYS = [
     "tissue_inflammatory_process",
 ]
 
-PAGE_2_KEYS = [
+PAGE_2_DISEASES = [
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -45,143 +78,149 @@ PAGE_2_KEYS = [
     "cerebral_serotonin_decreased",
 ]
 
-ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
+# -----------------------------
+# UTILITIES
+# -----------------------------
 
+def classify_color(hsv_pixel):
+    if cv2.inRange(hsv_pixel, YELLOW_LOW, YELLOW_HIGH):
+        return "mild"
+    if cv2.inRange(hsv_pixel, ORANGE_LOW, ORANGE_HIGH):
+        return "moderate"
+    if (cv2.inRange(hsv_pixel, RED_LOW_1, RED_HIGH_1) or
+        cv2.inRange(hsv_pixel, RED_LOW_2, RED_HIGH_2)):
+        return "severe"
+    return "none"
 
-# =========================================================
-# HEALTH CHECK
-# =========================================================
+def is_gray(hsv_pixel):
+    return cv2.inRange(hsv_pixel, GRAY_LOW, GRAY_HIGH)
 
-@app.route("/", methods=["GET"])
-def health():
-    return "HSV Preprocess Service Running v25", 200
+def process_row_overlay_span(row_img):
+    """
+    Detect colored overlay span horizontally.
+    Then sample center of detected span.
+    """
 
+    hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
+    height, width, _ = hsv.shape
 
-# =========================================================
-# FIXED GEOMETRY + CENTER SAMPLING
-# =========================================================
+    sample_y = height // 2
 
-def extract_rows_geometry_center_locked(image, disease_keys):
-    h, w, _ = image.shape
+    left_bound = int(width * LEFT_SAMPLE_RATIO)
+    right_bound = int(width * RIGHT_SAMPLE_RATIO)
 
-    # Fixed score column crop (template locked)
-    x1 = int(w * 0.48)
-    x2 = int(w * 0.85)
-    y1 = int(h * 0.20)
-    y2 = int(h * 0.88)
+    overlay_pixels = []
 
-    col = image[y1:y2, x1:x2]
-    col_h, col_w = col.shape[:2]
+    for x in range(left_bound, right_bound):
+        pixel = hsv[sample_y:sample_y+1, x:x+1]
+        if not is_gray(pixel):
+            overlay_pixels.append(x)
 
-    total_rows = 14  # 1 heading + 12 diseases + 1 section gap
-    row_height = col_h // total_rows
+    if not overlay_pixels:
+        return "none"
+
+    span_left = min(overlay_pixels)
+    span_right = max(overlay_pixels)
+
+    center_x = (span_left + span_right) // 2
+
+    center_pixel = hsv[sample_y:sample_y+1, center_x:center_x+1]
+
+    return classify_color(center_pixel)
+
+def render_page_to_image(page):
+    pix = page.get_pixmap(dpi=200)
+    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, pix.n
+    )
+    if pix.n == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+    else:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    return img
+
+# -----------------------------
+# ROUTES
+# -----------------------------
+
+@app.route("/")
+def home():
+    return f"HSV Preprocess Service Running v26"
+
+@app.route("/v1/detect-disease-bars", methods=["POST"])
+def detect_disease_bars():
+
+    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    pdf_bytes = file.read()
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     results = {}
 
-    for i, key in enumerate(disease_keys):
-        row_index = i + 1  # skip heading row (row 0)
+    target_pages = min(len(doc), 10)
 
-        top = row_index * row_height
-        bottom = (row_index + 1) * row_height
+    for page_index in range(target_pages):
 
-        row_crop = col[top:bottom, :]
+        page = doc.load_page(page_index)
+        img = render_page_to_image(page)
 
-        # CENTER SAMPLE WINDOW (deterministic)
-        rh, rw = row_crop.shape[:2]
+        height = img.shape[0]
+        width = img.shape[1]
 
-        cy1 = int(rh * 0.25)
-        cy2 = int(rh * 0.75)
+        top = int(height * TOP_MARGIN_RATIO)
+        bottom = int(height * (1 - BOTTOM_MARGIN_RATIO))
 
-        cx1 = int(rw * 0.30)
-        cx2 = int(rw * 0.70)
+        content = img[top:bottom, :]
 
-        center_crop = row_crop[cy1:cy2, cx1:cx2]
+        row_height = content.shape[0] // ROWS_PER_PAGE
 
-        label, percent = classify_color(center_crop)
+        for row_index in range(ROWS_PER_PAGE):
 
-        results[key] = {
-            "progression_percent": percent,
-            "risk_label": label,
-            "source": ENGINE_NAME
-        }
+            row_top = row_index * row_height
+            row_bottom = row_top + row_height
+            row_img = content[row_top:row_bottom, :]
 
-    return results
+            # Skip headings (row 0 and row 7)
+            if row_index in [0, 7]:
+                continue
 
+            if page_index == 0:
+                disease_list = PAGE_1_DISEASES
+                disease_index = row_index - (1 if row_index > 0 else 0)
+            elif page_index == 1:
+                disease_list = PAGE_2_DISEASES
+                disease_index = row_index - (1 if row_index > 0 else 0)
+            else:
+                continue
 
-# =========================================================
-# COLOR CLASSIFICATION (STRICT SATURATION FILTER)
-# =========================================================
+            if disease_index < 0 or disease_index >= len(disease_list):
+                continue
 
-def classify_color(bgr_crop):
-    hsv = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
-    hue = hsv[:, :, 0]
-    sat = hsv[:, :, 1]
+            disease_key = disease_list[disease_index]
 
-    # Remove dark gray background
-    mask = sat > 40
+            color_label = process_row_overlay_span(row_img)
 
-    if np.sum(mask) == 0:
-        return "none", 20
+            progression = COLOR_MAP[color_label]
 
-    avg_hue = np.mean(hue[mask])
+            results[disease_key] = {
+                "progression_percent": progression,
+                "risk_label": color_label,
+                "source": ENGINE_VERSION
+            }
 
-    if 0 <= avg_hue <= 10:
-        return "severe", 85
-    elif 10 < avg_hue <= 20:
-        return "moderate", 70
-    elif 20 < avg_hue <= 35:
-        return "mild", 50
-    elif 45 <= avg_hue <= 80:
-        return "normal", 10
-    else:
-        return "none", 20
-
-
-# =========================================================
-# MAIN ENDPOINT
-# =========================================================
-
-@app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect():
-    try:
-        if request.headers.get("Authorization") != f"Bearer {API_KEY}":
-            return jsonify({"error": "Unauthorized"}), 401
-
-        if "file" not in request.files:
-            return jsonify({"error": "No file"}), 400
-
-        pdf_bytes = request.files["file"].read()
-        pages = convert_from_bytes(pdf_bytes, dpi=200)
-
-        results = {}
-
-        if len(pages) >= 1:
-            img1 = cv2.cvtColor(np.array(pages[0]), cv2.COLOR_RGB2BGR)
-            results.update(extract_rows_geometry_center_locked(img1, PAGE_1_KEYS))
-
-        if len(pages) >= 2:
-            img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
-            results.update(extract_rows_geometry_center_locked(img2, PAGE_2_KEYS))
-
-        # Deterministic safeguard fill
-        for key in ALL_KEYS:
-            if key not in results:
-                results[key] = {
-                    "progression_percent": 20,
-                    "risk_label": "none",
-                    "source": ENGINE_NAME
-                }
-
-        return jsonify({
-            "engine": ENGINE_NAME,
-            "pages_found": len(pages),
-            "results": results
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "engine": ENGINE_VERSION,
+        "pages_found": target_pages,
+        "results": results
+    })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
