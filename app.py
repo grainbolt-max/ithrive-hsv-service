@@ -8,47 +8,44 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v19_locked"
+ENGINE_NAME = "hsv_v20_order_locked"
 
-# ======================================================
-# Anchors relative to disease score column crop (0–1)
-# These are calibrated for your template layout.
-# ======================================================
+# Fixed disease order (confirmed stable layout)
 
-PAGE_1_ANCHORS = {
-    "large_artery_stiffness": 0.12,
-    "peripheral_vessels": 0.16,
-    "blood_glucose_uncontrolled": 0.20,
-    "small_medium_artery_stiffness": 0.24,
-    "atherosclerosis": 0.28,
-    "ldl_cholesterol": 0.32,
-    "lv_hypertrophy": 0.36,
-    "metabolic_syndrome": 0.44,
-    "insulin_resistance": 0.48,
-    "beta_cell_function_decreased": 0.52,
-    "tissue_inflammatory_process": 0.56,
-}
+PAGE_1_KEYS = [
+    "large_artery_stiffness",
+    "peripheral_vessels",
+    "blood_glucose_uncontrolled",
+    "small_medium_artery_stiffness",
+    "atherosclerosis",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "metabolic_syndrome",
+    "insulin_resistance",
+    "beta_cell_function_decreased",
+    "tissue_inflammatory_process",
+]
 
-PAGE_2_ANCHORS = {
-    "hypothyroidism": 0.10,
-    "hyperthyroidism": 0.14,
-    "hepatic_fibrosis": 0.18,
-    "chronic_hepatitis": 0.22,
-    "respiratory": 0.30,
-    "kidney_function": 0.34,
-    "digestive_disorders": 0.38,
-    "major_depression": 0.46,
-    "adhd_children_learning": 0.50,
-    "cerebral_dopamine_decreased": 0.54,
-    "cerebral_serotonin_decreased": 0.58,
-}
+PAGE_2_KEYS = [
+    "hypothyroidism",
+    "hyperthyroidism",
+    "hepatic_fibrosis",
+    "chronic_hepatitis",
+    "respiratory",
+    "kidney_function",
+    "digestive_disorders",
+    "major_depression",
+    "adhd_children_learning",
+    "cerebral_dopamine_decreased",
+    "cerebral_serotonin_decreased",
+]
 
-ALL_KEYS = set(PAGE_1_ANCHORS.keys()) | set(PAGE_2_ANCHORS.keys())
+ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
 
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v19", 200
+    return "HSV Preprocess Service Running v20", 200
 
 
 def classify_bar(hsv_crop):
@@ -71,10 +68,9 @@ def classify_bar(hsv_crop):
         return "none", 20
 
 
-def process_page(image, anchor_map):
+def detect_segments(image):
     h, w, _ = image.shape
 
-    # Disease Score column crop (locked)
     x1 = int(w * 0.48)
     x2 = int(w * 0.85)
     y1 = int(h * 0.18)
@@ -101,31 +97,31 @@ def process_page(image, anchor_map):
     if start is not None:
         segments.append((start, len(mask)))
 
+    # sort top to bottom
+    segments = sorted(segments, key=lambda x: x[0])
+
+    return hsv, segments
+
+
+def process_page(image, key_order):
+    hsv, segments = detect_segments(image)
+
     results = {}
-    crop_height = y2 - y1
 
-    for seg in segments:
-        mid = (seg[0] + seg[1]) // 2
-        mid_ratio = mid / crop_height  # now relative to crop only
+    for idx, seg in enumerate(segments):
+        if idx >= len(key_order):
+            break
 
-        closest_key = None
-        closest_dist = 999
+        key = key_order[idx]
 
-        for key, anchor_ratio in anchor_map.items():
-            dist = abs(mid_ratio - anchor_ratio)
-            if dist < closest_dist:
-                closest_dist = dist
-                closest_key = key
+        crop = hsv[seg[0]:seg[1], :, :]
+        label, percent = classify_bar(crop)
 
-        if closest_key:
-            crop = hsv[seg[0]:seg[1], :, :]
-            label, percent = classify_bar(crop)
-
-            results[closest_key] = {
-                "progression_percent": percent,
-                "risk_label": label,
-                "source": ENGINE_NAME
-            }
+        results[key] = {
+            "progression_percent": percent,
+            "risk_label": label,
+            "source": ENGINE_NAME
+        }
 
     return results
 
@@ -146,11 +142,11 @@ def detect():
 
         if len(pages) >= 1:
             img1 = cv2.cvtColor(np.array(pages[0]), cv2.COLOR_RGB2BGR)
-            results.update(process_page(img1, PAGE_1_ANCHORS))
+            results.update(process_page(img1, PAGE_1_KEYS))
 
         if len(pages) >= 2:
             img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
-            results.update(process_page(img2, PAGE_2_ANCHORS))
+            results.update(process_page(img2, PAGE_2_KEYS))
 
         for key in ALL_KEYS:
             if key not in results:
