@@ -1,19 +1,35 @@
+# ==============================
+# v31 STRICT SATURATION SPAN LOCKED
+# ==============================
+
 import os
-import fitz  # PyMuPDF
 import cv2
 import numpy as np
 from flask import Flask, request, jsonify
+from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_VERSION = "hsv_v30_1_strict_isolate_rgba_safe"
+ENGINE_NAME = "hsv_v31_strict_saturation_span_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
-# =====================================
-# DISEASE ORDER (EXACT ROW ORDER)
-# =====================================
+# --- CONFIGURATION ---
 
-PAGE_1 = [
+# Saturation threshold to remove gray background
+SATURATION_THRESHOLD = 50
+
+# Bar geometry (locked)
+BAR_LEFT = 350
+BAR_RIGHT = 1100
+BAR_HEIGHT = 28
+
+# Vertical spacing
+ROW_START_Y = 420
+ROW_GAP = 42
+
+# 24 diseases in fixed order
+DISEASE_ORDER = [
+    # Page 1
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -25,10 +41,9 @@ PAGE_1 = [
     "insulin_resistance",
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
-    "tissue_inflammatory_process"
-]
+    "tissue_inflammatory_process",
 
-PAGE_2 = [
+    # Page 2
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -40,191 +55,102 @@ PAGE_2 = [
     "major_depression",
     "adhd_children_learning",
     "cerebral_dopamine_decreased",
-    "cerebral_serotonin_decreased"
+    "cerebral_serotonin_decreased",
 ]
 
-# =====================================
-# STRICT HSV COLOR ISOLATION
-# =====================================
 
-def positive_color_mask(hsv):
-    h = hsv[:, :, 0]
-    s = hsv[:, :, 1]
-    v = hsv[:, :, 2]
-
-    # Exclude dark gray background (low brightness)
-    bright = v > 120
-
-    # Yellow
-    yellow = (
-        (h >= 18) & (h <= 35) &
-        (s > 80) &
-        bright
-    )
-
-    # Orange
-    orange = (
-        (h >= 8) & (h < 18) &
-        (s > 100) &
-        bright
-    )
-
-    # Red
-    red = (
-        ((h <= 6) | (h >= 170)) &
-        (s > 120) &
-        bright
-    )
-
-    # Light neutral gray (striped "none/low")
-    neutral_light = (
-        (s < 40) &
-        (v > 170)
-    )
-
-    mask = yellow | orange | red | neutral_light
-    return mask.astype(np.uint8) * 255
-
-
-# =====================================
-# SPAN DETECTION
-# =====================================
-
-def detect_span_percent(crop):
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    mask = positive_color_mask(hsv)
-
-    height, width = mask.shape
-
-    col_has_color = np.any(mask > 0, axis=0)
-    colored_indices = np.where(col_has_color)[0]
-
-    if len(colored_indices) == 0:
-        return 0
-
-    last_index = colored_indices[-1]
-    percent = int((last_index / width) * 100)
-
-    return percent
-
-
-# =====================================
-# RISK LABEL MAPPING
-# =====================================
-
-def risk_from_percent(p):
+def risk_label_from_percent(p):
     if p >= 75:
         return "severe"
     elif p >= 50:
         return "moderate"
     elif p >= 25:
         return "mild"
-    elif p > 0:
-        return "none"
-    else:
+    elif p >= 10:
         return "normal"
-
-
-# =====================================
-# PDF PROCESSING
-# =====================================
-
-def render_page(page):
-    pix = page.get_pixmap(dpi=200)
-    img = np.frombuffer(pix.samples, dtype=np.uint8)
-    img = img.reshape(pix.height, pix.width, pix.n)
-
-    # RGBA SAFE CONVERSION
-    if pix.n == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
     else:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    return img
+        return "none"
 
 
-def process_pdf(file_stream):
-    results = {}
-    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
-    pages_found = len(doc)
+def analyze_bar(image, row_index):
+    y1 = ROW_START_Y + (row_index * ROW_GAP)
+    y2 = y1 + BAR_HEIGHT
 
-    # Hard geometry lock (adjust if needed)
-    X_START = 900
-    X_END = 1700
+    roi = image[y1:y2, BAR_LEFT:BAR_RIGHT]
 
-    Y_START = 700
-    ROW_HEIGHT = 90
-    ROW_SPACING = 95
+    if roi.size == 0:
+        return 0
 
-    # PAGE 1
-    img1 = render_page(doc[0])
+    # Convert safely to BGR if RGBA
+    if roi.shape[2] == 4:
+        roi = cv2.cvtColor(roi, cv2.COLOR_BGRA2BGR)
 
-    for i, disease in enumerate(PAGE_1):
-        y1 = Y_START + i * ROW_SPACING
-        y2 = y1 + ROW_HEIGHT
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        crop = img1[y1:y2, X_START:X_END]
-        percent = detect_span_percent(crop)
-        label = risk_from_percent(percent)
+    # Strict saturation isolate
+    s_channel = hsv[:, :, 1]
+    color_mask = s_channel > SATURATION_THRESHOLD
 
-        results[disease] = {
-            "progression_percent": percent,
-            "risk_label": label,
-            "source": ENGINE_VERSION
-        }
+    # Find horizontal extent
+    cols = np.where(np.any(color_mask, axis=0))[0]
 
-    # PAGE 2
-    img2 = render_page(doc[1])
+    if len(cols) == 0:
+        return 0
 
-    for i, disease in enumerate(PAGE_2):
-        y1 = Y_START + i * ROW_SPACING
-        y2 = y1 + ROW_HEIGHT
+    rightmost = cols[-1]
+    percent = int((rightmost / roi.shape[1]) * 100)
 
-        crop = img2[y1:y2, X_START:X_END]
-        percent = detect_span_percent(crop)
-        label = risk_from_percent(percent)
-
-        results[disease] = {
-            "progression_percent": percent,
-            "risk_label": label,
-            "source": ENGINE_VERSION
-        }
-
-    return results, pages_found
+    return percent
 
 
-# =====================================
-# ROUTES
-# =====================================
-
-@app.route("/", methods=["GET"])
-def root():
-    return "HSV Preprocess Service Running v30.1"
+@app.route("/")
+def home():
+    return "HSV Preprocess Service Running v31"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {AUTH_KEY}":
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header != f"Bearer {AUTH_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No file provided"}), 400
 
-    file = request.files["file"]
+    file = request.files["file"].read()
 
     try:
-        results, pages_found = process_pdf(file)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        pages = convert_from_bytes(file, dpi=300)
+    except:
+        return jsonify({"error": "PDF conversion failed"}), 500
+
+    results = {}
+    disease_index = 0
+
+    for page in pages[:2]:  # Only first 2 pages contain bars
+        image = np.array(page)
+
+        for _ in range(12):
+            if disease_index >= len(DISEASE_ORDER):
+                break
+
+            percent = analyze_bar(image, disease_index % 12)
+            label = risk_label_from_percent(percent)
+
+            results[DISEASE_ORDER[disease_index]] = {
+                "progression_percent": percent,
+                "risk_label": label,
+                "source": ENGINE_NAME
+            }
+
+            disease_index += 1
 
     return jsonify({
-        "engine": ENGINE_VERSION,
-        "pages_found": pages_found,
+        "engine": ENGINE_NAME,
+        "pages_found": len(pages),
         "results": results
     })
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
