@@ -8,11 +8,12 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = os.environ.get("PREPROCESS_API_KEY", "dev-key")
-ENGINE_NAME = "hsv_v23_variance_locked"
+ENGINE_NAME = "hsv_v24_geometry_locked"
 
-# =========================
-# FIXED DISEASE ORDER
-# =========================
+
+# =========================================================
+# FIXED DISEASE ORDER (STRICT TEMPLATE MATCH)
+# =========================================================
 
 PAGE_1_KEYS = [
     "large_artery_stiffness",
@@ -47,65 +48,73 @@ PAGE_2_KEYS = [
 ALL_KEYS = set(PAGE_1_KEYS) | set(PAGE_2_KEYS)
 
 
-# =========================
+# =========================================================
 # HEALTH CHECK
-# =========================
+# =========================================================
 
 @app.route("/", methods=["GET"])
 def health():
-    return "HSV Preprocess Service Running v23", 200
+    return "HSV Preprocess Service Running v24", 200
 
 
-# =========================
-# STRIPE SEGMENT DETECTION (Variance-Based)
-# =========================
+# =========================================================
+# FIXED GEOMETRY ROW EXTRACTION
+# =========================================================
 
-def detect_stripe_segments(image):
+def extract_rows_geometry_locked(image, disease_keys):
     h, w, _ = image.shape
 
-    # Crop score column region
+    # Fixed score column crop (template-specific)
     x1 = int(w * 0.48)
     x2 = int(w * 0.85)
-    y1 = int(h * 0.18)
+    y1 = int(h * 0.20)
     y2 = int(h * 0.88)
 
     col = image[y1:y2, x1:x2]
-    gray = cv2.cvtColor(col, cv2.COLOR_BGR2GRAY)
+    col_h = col.shape[0]
 
-    # Stripe rows have higher brightness variance
-    row_variance = np.std(gray, axis=1)
+    # Template has 14 total rows:
+    # Row 0 = Heading
+    # Rows 1–12 = Diseases
+    # Row 13 = Section break (ignored)
 
-    # Threshold tuned for striped pattern
-    mask = row_variance > 8
+    total_rows = 14
+    row_height = col_h // total_rows
 
-    segments = []
-    start = None
+    results = {}
 
-    for i, val in enumerate(mask):
-        if val and start is None:
-            start = i
-        elif not val and start is not None:
-            if i - start > 8:
-                segments.append((start, i))
-            start = None
+    for i, key in enumerate(disease_keys):
+        # Disease rows are index 1–12
+        row_index = i + 1
 
-    if start is not None:
-        segments.append((start, len(mask)))
+        top = row_index * row_height
+        bottom = (row_index + 1) * row_height
 
-    segments = sorted(segments, key=lambda x: x[0])
-    return col, segments
+        row_crop = col[top:bottom, :]
+
+        label, percent = classify_color(row_crop)
+
+        results[key] = {
+            "progression_percent": percent,
+            "risk_label": label,
+            "source": ENGINE_NAME
+        }
+
+    return results
 
 
-# =========================
-# COLOR CLASSIFICATION
-# =========================
+# =========================================================
+# COLOR CLASSIFICATION (DIRECT HSV)
+# =========================================================
 
 def classify_color(bgr_crop):
     hsv = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
     hue = hsv[:, :, 0]
     sat = hsv[:, :, 1]
 
-    mask = sat > 20
+    # Ignore low saturation (dark gray background)
+    mask = sat > 25
+
     if np.sum(mask) == 0:
         return "none", 20
 
@@ -123,35 +132,9 @@ def classify_color(bgr_crop):
         return "none", 20
 
 
-# =========================
-# PAGE PROCESSING
-# =========================
-
-def process_page(image, key_order):
-    col, segments = detect_stripe_segments(image)
-
-    results = {}
-
-    for idx, seg in enumerate(segments):
-        if idx >= len(key_order):
-            break
-
-        key = key_order[idx]
-        crop = col[seg[0]:seg[1], :]
-        label, percent = classify_color(crop)
-
-        results[key] = {
-            "progression_percent": percent,
-            "risk_label": label,
-            "source": ENGINE_NAME
-        }
-
-    return results
-
-
-# =========================
-# MAIN API ENDPOINT
-# =========================
+# =========================================================
+# MAIN ENDPOINT
+# =========================================================
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -169,13 +152,13 @@ def detect():
 
         if len(pages) >= 1:
             img1 = cv2.cvtColor(np.array(pages[0]), cv2.COLOR_RGB2BGR)
-            results.update(process_page(img1, PAGE_1_KEYS))
+            results.update(extract_rows_geometry_locked(img1, PAGE_1_KEYS))
 
         if len(pages) >= 2:
             img2 = cv2.cvtColor(np.array(pages[1]), cv2.COLOR_RGB2BGR)
-            results.update(process_page(img2, PAGE_2_KEYS))
+            results.update(extract_rows_geometry_locked(img2, PAGE_2_KEYS))
 
-        # Fill missing keys deterministically
+        # Hard fill missing keys deterministically
         for key in ALL_KEYS:
             if key not in results:
                 results[key] = {
