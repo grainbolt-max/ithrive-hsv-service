@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (V67 DETECTION + SATURATION-MASKED COLOR)
+# DECLARE (V67 DETECTION + RAW HSV CALIBRATION)
 # ==================================================
 
-ENGINE_NAME = "v74_full_24_color_detection_masked"
+ENGINE_NAME = "v75_full_24_color_calibration"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -53,7 +53,7 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# DETECTION (UNCHANGED V67 LOGIC)
+# DETECTION (UNCHANGED V67)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -122,10 +122,10 @@ def detect_all_bars_on_page(img):
 
 
 # ==================================================
-# COLOR CLASSIFICATION (SATURATION MASKED)
+# RAW HSV EXTRACTION
 # ==================================================
 
-def classify_color_from_bar(img, y_center):
+def extract_hsv_from_bar(img, y_center):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
@@ -135,7 +135,7 @@ def classify_color_from_bar(img, y_center):
     nonzero = np.where(col_mask)[0]
 
     if len(nonzero) == 0:
-        return "none"
+        return {"avg_h": None, "avg_s": None, "avg_v": None}
 
     x_start = nonzero[0]
 
@@ -146,37 +146,31 @@ def classify_color_from_bar(img, y_center):
 
     sample = hsv[y1:y2, x1:x2]
 
-    # Mask out low-saturation pixels (white separators)
     sat = sample[:, :, 1]
     hue = sample[:, :, 0]
+    val = sample[:, :, 2]
 
-    mask = sat > 40  # Only keep real colored pixels
+    mask = sat > 40  # Ignore white separators
 
     if np.sum(mask) == 0:
-        return "none"
+        return {
+            "avg_h": float(np.mean(hue)),
+            "avg_s": float(np.mean(sat)),
+            "avg_v": float(np.mean(val))
+        }
 
-    avg_h = np.mean(hue[mask])
-
-    # Red (Severe)
-    if avg_h <= 10 or avg_h >= 170:
-        return "severe"
-
-    # Orange (Moderate)
-    if 10 < avg_h <= 20:
-        return "moderate"
-
-    # Yellow (Mild)
-    if 20 < avg_h <= 35:
-        return "mild"
-
-    return "none"
+    return {
+        "avg_h": float(np.mean(hue[mask])),
+        "avg_s": float(np.mean(sat[mask])),
+        "avg_v": float(np.mean(val[mask]))
+    }
 
 
 # ==================================================
-# MAIN 24-DISEASE MAPPING
+# MAIN
 # ==================================================
 
-def detect_all_24_diseases(pages):
+def calibrate_all_24(pages):
 
     global_bars = []
 
@@ -197,13 +191,11 @@ def detect_all_24_diseases(pages):
 
     for disease, (page_index, y_center) in zip(PAGE_1_DISEASES, page1_bars):
         img = np.array(pages[page_index])
-        risk = classify_color_from_bar(img, y_center)
-        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
+        results[disease] = extract_hsv_from_bar(img, y_center)
 
     for disease, (page_index, y_center) in zip(PAGE_2_DISEASES, page2_bars_reversed):
         img = np.array(pages[page_index])
-        risk = classify_color_from_bar(img, y_center)
-        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
+        results[disease] = extract_hsv_from_bar(img, y_center)
 
     return results
 
@@ -238,7 +230,7 @@ def detect_disease_bars():
             single_file=False
         )
 
-        results = detect_all_24_diseases(pages)
+        results = calibrate_all_24(pages)
 
         return jsonify({
             "engine": ENGINE_NAME,
