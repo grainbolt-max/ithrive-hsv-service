@@ -9,25 +9,49 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v61_full_vertical_scan_index_lock"
+ENGINE_NAME = "v62_vertical_band_height_filtered"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
-
 EXPECTED_PROBE_HEIGHT = 2200
 MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
-BAR_MIN_WIDTH = 300
-BAR_SAMPLE_THICKNESS = 6
-VERTICAL_SCAN_STEP = 3
 
-TARGET_ROW_INDEX = 0  # <-- CHANGE THIS TO SELECT WHICH BAR (0 = top bar)
+BAR_MIN_WIDTH = 600       # real disease bars are wide
+BAR_MIN_HEIGHT = 14       # eliminate thin dividers
+VERTICAL_SCAN_STEP = 2
+
+TARGET_ROW_INDEX = 0      # <-- CHANGE THIS
 
 
 # =========================
-# APPLY (FULL PAGE BAR DETECTION)
+# APPLY
 # =========================
+
+def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
+
+    y_top = start_y
+    y_bottom = start_y
+
+    # scan upward
+    while y_top > 0:
+        row = value_channel[y_top, x_start:x_end]
+        if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
+            y_top -= 1
+        else:
+            break
+
+    # scan downward
+    while y_bottom < height - 1:
+        row = value_channel[y_bottom, x_start:x_end]
+        if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
+            y_bottom += 1
+        else:
+            break
+
+    return y_top, y_bottom
+
 
 def detect_all_bars(img):
 
@@ -35,21 +59,13 @@ def detect_all_bars(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
-    detected_rows = []
-
+    detected = []
     y = 10
+
     while y < runtime_height - 10:
 
-        y1 = y - BAR_SAMPLE_THICKNESS // 2
-        y2 = y + BAR_SAMPLE_THICKNESS // 2
-
-        if y1 < 0 or y2 >= runtime_height:
-            y += VERTICAL_SCAN_STEP
-            continue
-
-        row_slice = value[y1:y2, :]
-
-        col_mask = np.mean(row_slice, axis=0) < VALUE_NONWHITE_THRESHOLD
+        row = value[y, :]
+        col_mask = row < VALUE_NONWHITE_THRESHOLD
         nonzero = np.where(col_mask)[0]
 
         if len(nonzero) > 0:
@@ -57,26 +73,31 @@ def detect_all_bars(img):
             x_end = nonzero[-1]
 
             if (x_end - x_start) > BAR_MIN_WIDTH:
-                detected_rows.append(y)
-                y += 40  # skip downward to avoid duplicates
-                continue
+
+                y_top, y_bottom = measure_vertical_band(
+                    value, y, x_start, x_end, runtime_height
+                )
+
+                band_height = y_bottom - y_top
+
+                if band_height >= BAR_MIN_HEIGHT:
+                    detected.append((y_top + y_bottom) // 2)
+                    y = y_bottom + 10
+                    continue
 
         y += VERTICAL_SCAN_STEP
 
-    return sorted(detected_rows)
+    detected_sorted = sorted(detected)
+    return detected_sorted
 
 
-def compute_bar_fill(img, y):
+def compute_bar_fill(img, y_center):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
-    y1 = y - BAR_SAMPLE_THICKNESS // 2
-    y2 = y + BAR_SAMPLE_THICKNESS // 2
-
-    row_slice = value[y1:y2, :]
-
-    col_mask = np.mean(row_slice, axis=0) < VALUE_NONWHITE_THRESHOLD
+    row = value[y_center, :]
+    col_mask = row < VALUE_NONWHITE_THRESHOLD
     nonzero = np.where(col_mask)[0]
 
     if len(nonzero) == 0:
@@ -85,7 +106,11 @@ def compute_bar_fill(img, y):
     x_start = nonzero[0]
     x_end = nonzero[-1]
 
-    bar_region = value[y1:y2, x_start:x_end]
+    y_top, y_bottom = measure_vertical_band(
+        value, y_center, x_start, x_end, value.shape[0]
+    )
+
+    bar_region = value[y_top:y_bottom, x_start:x_end]
 
     filled_pixels = np.sum(bar_region < VALUE_NONWHITE_THRESHOLD)
     total_pixels = bar_region.size
@@ -106,18 +131,19 @@ def detect_progression_percent(img):
     bars = detect_all_bars(img)
 
     if len(bars) == 0:
-        return 0
+        return 0, 0
 
     if TARGET_ROW_INDEX >= len(bars):
-        return 0
+        return len(bars), 0
 
     target_y = bars[TARGET_ROW_INDEX]
+    percent = compute_bar_fill(img, target_y)
 
-    return compute_bar_fill(img, target_y)
+    return len(bars), percent
 
 
 # =========================
-# OUTPUT (API ROUTE)
+# OUTPUT
 # =========================
 
 @app.route("/")
@@ -149,7 +175,7 @@ def detect_disease_bars():
         pages_found = len(pages)
         img = np.array(pages[0])
 
-        progression_percent = detect_progression_percent(img)
+        bars_detected, progression_percent = detect_progression_percent(img)
 
         results = {
             "selected_row": {
@@ -162,7 +188,7 @@ def detect_disease_bars():
         return jsonify({
             "engine": ENGINE_NAME,
             "pages_found": pages_found,
-            "bars_detected": len(detect_all_bars(img)),
+            "bars_detected": bars_detected,
             "results": results
         })
 
