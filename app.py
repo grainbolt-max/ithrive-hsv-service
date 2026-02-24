@@ -1,8 +1,8 @@
 # ===================================================
-# v37 STRICT HUE + SATURATION SPAN (FIXED GEOMETRY)
-# Page-aware geometry
+# v38 STRICT HSV (H + S + V) FIXED-SPAN ENGINE
+# Deterministic geometry
+# No track detection
 # PyMuPDF @ 300 DPI
-# Deterministic. No track detection.
 # ===================================================
 
 import fitz
@@ -12,15 +12,16 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v37_fixed_span_strict_locked"
+ENGINE_NAME = "hsv_v38_strict_hsv_span_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
 # CONFIG
 # ----------------------------
 
-SATURATION_THRESHOLD = 30
-MIN_COLUMN_DENSITY = 0.4
+SATURATION_THRESHOLD = 40
+VALUE_THRESHOLD = 150
+MIN_COLUMN_DENSITY = 0.35
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
@@ -74,18 +75,25 @@ def risk_label_from_percent(p):
         return "none"
 
 # ----------------------------
-# COLOR MASK
+# STRICT HSV MASK
 # ----------------------------
 
 def disease_color_mask(hsv):
     h = hsv[:, :, 0]
     s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
 
     red_mask = ((h >= 0) & (h <= 10)) | ((h >= 170) & (h <= 180))
-    orange_mask = (h > 10) & (h <= 20)
-    yellow_mask = (h > 20) & (h <= 35)
+    orange_mask = (h > 10) & (h <= 22)
+    yellow_mask = (h > 22) & (h <= 38)
 
-    return (s > SATURATION_THRESHOLD) & (red_mask | orange_mask | yellow_mask)
+    hue_mask = red_mask | orange_mask | yellow_mask
+
+    return (
+        hue_mask &
+        (s > SATURATION_THRESHOLD) &
+        (v > VALUE_THRESHOLD)
+    )
 
 # ----------------------------
 # ANALYZE BAR
@@ -103,6 +111,7 @@ def analyze_bar(image, base_y, row_index):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask = disease_color_mask(hsv)
 
+    # Remove stray pixels
     col_density = np.sum(mask, axis=0) / mask.shape[0]
     valid_cols = np.where(col_density > MIN_COLUMN_DENSITY)[0]
 
@@ -123,7 +132,7 @@ def analyze_bar(image, base_y, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v37"
+    return "HSV Preprocess Service Running v38"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
