@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL PRODUCTION ENGINE)
+# DECLARE (FINAL LOCKED ENGINE)
 # ==================================================
 
-ENGINE_NAME = "v76_full_24_color_detection_production"
+ENGINE_NAME = "v77_full_24_color_detection_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -21,12 +21,13 @@ BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-# Hue thresholds calibrated from real data
+# Calibrated hue thresholds
 RED_MAX = 8
 ORANGE_MAX = 20
 YELLOW_MAX = 40
 
-SATURATION_THRESHOLD = 60  # Detect stripe pixels only
+# Lowered saturation threshold based on real calibration
+SATURATION_THRESHOLD = 20
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -146,7 +147,6 @@ def classify_color_from_bar(img, y_center):
 
     x_start = nonzero[0]
 
-    # Wider sampling window to capture stripes
     y1 = max(0, y_center - 4)
     y2 = min(img.shape[0], y_center + 4)
     x1 = x_start + 5
@@ -157,7 +157,7 @@ def classify_color_from_bar(img, y_center):
     sat = sample[:, :, 1]
     hue = sample[:, :, 0]
 
-    # Only keep colored stripe pixels
+    # Detect stripe pixels
     mask = sat > SATURATION_THRESHOLD
 
     if np.sum(mask) == 0:
@@ -165,15 +165,12 @@ def classify_color_from_bar(img, y_center):
 
     dominant_hue = float(np.mean(hue[mask]))
 
-    # Severe (Red)
     if dominant_hue <= RED_MAX or dominant_hue >= 170:
         return "severe"
 
-    # Moderate (Orange)
     if RED_MAX < dominant_hue <= ORANGE_MAX:
         return "moderate"
 
-    # Mild (Yellow)
     if ORANGE_MAX < dominant_hue <= YELLOW_MAX:
         return "mild"
 
