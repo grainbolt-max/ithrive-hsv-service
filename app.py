@@ -1,42 +1,73 @@
 from flask import Flask, request, jsonify
-import os
 import numpy as np
 from pdf2image import convert_from_bytes
 import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v57_runtime_anchor_probe"
+# =========================
+# DECLARE (HARD CONSTANTS)
+# =========================
 
+ENGINE_NAME = "v57_deterministic_scaled_anchor"
 API_KEY = "ithrive_secure_2026_key"
 
+DPI_LOCK = 200
 
-def find_first_nonwhite_row(img):
-    """
-    Find first row that is not pure white.
-    """
-    h, w, _ = img.shape
-    for y in range(h):
-        row = img[y, :, :]
-        if np.mean(row) < 250:  # not white
-            return y
-    return None
+EXPECTED_PROBE_WIDTH = 1700
+EXPECTED_PROBE_HEIGHT = 2200
+
+EXPECTED_ANCHOR_Y = 1022  # Derived from geometry probe at 2200px height
+MAX_HEIGHT_DRIFT_RATIO = 0.03  # 3% hard fail
+
+BAR_X_START = 400
+BAR_X_END = 1500
+BAR_SAMPLE_THICKNESS = 4
 
 
-def detect_gray_track_center(img):
-    """
-    Detect horizontal gray bar by scanning for low saturation band.
-    """
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h, w, _ = hsv.shape
+# =========================
+# APPLY (PURE GEOMETRY)
+# =========================
 
-    for y in range(h):
-        row = hsv[y, :, :]
-        # Gray has low saturation
-        if np.mean(row[:, 1]) < 20 and np.mean(row[:, 2]) < 240:
-            return y
-    return None
+def detect_progression_percent(img):
 
+    runtime_height, runtime_width, _ = img.shape
+
+    # --- Hard validation ---
+    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
+
+    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
+        raise RuntimeError(
+            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
+        )
+
+    # --- Deterministic scaling ---
+    scale = runtime_height / EXPECTED_PROBE_HEIGHT
+    anchor_y = int(EXPECTED_ANCHOR_Y * scale)
+
+    # --- Extract bar slice ---
+    y1 = anchor_y - BAR_SAMPLE_THICKNESS // 2
+    y2 = anchor_y + BAR_SAMPLE_THICKNESS // 2
+
+    bar_slice = img[y1:y2, BAR_X_START:BAR_X_END]
+
+    hsv = cv2.cvtColor(bar_slice, cv2.COLOR_BGR2HSV)
+
+    # Detect non-white pixels
+    saturation = hsv[:, :, 1]
+    mask = saturation > 30
+
+    filled_pixels = np.sum(mask)
+    total_pixels = mask.size
+
+    progression_percent = int((filled_pixels / total_pixels) * 100)
+
+    return progression_percent
+
+
+# =========================
+# OUTPUT (API ROUTE)
+# =========================
 
 @app.route("/")
 def home():
@@ -44,56 +75,53 @@ def home():
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect():
-    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
+def detect_disease_bars():
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file"}), 400
+        return jsonify({"error": "No file uploaded"}), 400
 
-    pdf_bytes = request.files["file"].read()
+    pdf_file = request.files["file"]
+    pdf_bytes = pdf_file.read()
 
     try:
-        pages = convert_from_bytes(pdf_bytes, dpi=200)
+        pages = convert_from_bytes(
+            pdf_bytes,
+            dpi=DPI_LOCK,
+            fmt="png",
+            single_file=False
+        )
+
+        pages_found = len(pages)
+
+        # Deterministic: only process first page
+        img = np.array(pages[0])
+
+        progression_percent = detect_progression_percent(img)
+
+        results = {
+            "adhd_children_learning": {
+                "progression_percent": progression_percent,
+                "risk_label": "mild" if progression_percent > 0 else "none",
+                "source": ENGINE_NAME
+            }
+        }
+
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "pages_found": pages_found,
+            "results": results
+        })
+
     except Exception as e:
-        return jsonify({"error": "PDF conversion failed", "details": str(e)})
-
-    img = np.array(pages[0])
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    height, width, _ = img.shape
-
-    first_nonwhite = find_first_nonwhite_row(img)
-    gray_center = detect_gray_track_center(img)
-
-    if first_nonwhite is None:
-        return jsonify({"error": "No nonwhite row found"})
-
-    if gray_center is None:
-        return jsonify({"error": "No gray band found"})
-
-    # Estimate row height by scanning next gray band
-    next_gray = None
-    for y in range(gray_center + 10, height):
-        row = img[y, :, :]
-        if np.mean(row) < 240:
-            next_gray = y
-            break
-
-    row_height = None
-    if next_gray:
-        row_height = next_gray - gray_center
-
-    return jsonify({
-        "engine": ENGINE_NAME,
-        "image_height": height,
-        "image_width": width,
-        "first_nonwhite_y": first_nonwhite,
-        "first_gray_track_y": gray_center,
-        "estimated_row_height": row_height
-    })
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "error": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
