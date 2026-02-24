@@ -9,22 +9,21 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v58_deterministic_scaled_window"
+ENGINE_NAME = "v59_deterministic_scaled_window_autoX"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
 
-EXPECTED_PROBE_WIDTH = 1700
 EXPECTED_PROBE_HEIGHT = 2200
+EXPECTED_ANCHOR_Y = 1022
 
-EXPECTED_ANCHOR_Y = 1022  # baseline from geometry probe
-MAX_HEIGHT_DRIFT_RATIO = 0.03  # 3% hard fail
+MAX_HEIGHT_DRIFT_RATIO = 0.03
 
-BAR_X_START = 400
-BAR_X_END = 1500
 BAR_SAMPLE_THICKNESS = 4
+VERTICAL_SCAN_RANGE = 60
 
-VERTICAL_SCAN_RANGE = 60  # deterministic bounded scan
+SATURATION_THRESHOLD = 30
+MIN_BAR_WIDTH = 200  # fail if detected bar too narrow
 
 
 # =========================
@@ -32,18 +31,38 @@ VERTICAL_SCAN_RANGE = 60  # deterministic bounded scan
 # =========================
 
 def compute_progression_for_y(img, y):
+
+    runtime_height, runtime_width, _ = img.shape
+
     y1 = y - BAR_SAMPLE_THICKNESS // 2
     y2 = y + BAR_SAMPLE_THICKNESS // 2
 
-    bar_slice = img[y1:y2, BAR_X_START:BAR_X_END]
+    if y1 < 0 or y2 >= runtime_height:
+        return 0
 
-    hsv = cv2.cvtColor(bar_slice, cv2.COLOR_BGR2HSV)
+    row_slice = img[y1:y2, :]
+
+    hsv = cv2.cvtColor(row_slice, cv2.COLOR_BGR2HSV)
     saturation = hsv[:, :, 1]
 
-    mask = saturation > 30
+    # Horizontal projection
+    col_mask = np.mean(saturation, axis=0) > SATURATION_THRESHOLD
 
-    filled_pixels = np.sum(mask)
-    total_pixels = mask.size
+    nonzero_indices = np.where(col_mask)[0]
+
+    if len(nonzero_indices) == 0:
+        return 0
+
+    x_start = int(nonzero_indices[0])
+    x_end = int(nonzero_indices[-1])
+
+    if (x_end - x_start) < MIN_BAR_WIDTH:
+        return 0
+
+    bar_region = saturation[:, x_start:x_end]
+
+    filled_pixels = np.sum(bar_region > SATURATION_THRESHOLD)
+    total_pixels = bar_region.size
 
     return int((filled_pixels / total_pixels) * 100)
 
@@ -52,21 +71,17 @@ def detect_progression_percent(img):
 
     runtime_height, runtime_width, _ = img.shape
 
-    # --- Hard validation ---
+    # Height validation
     height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
-
     if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
         raise RuntimeError(
             f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
         )
 
-    # --- Deterministic scaling ---
     scale = runtime_height / EXPECTED_PROBE_HEIGHT
     scaled_anchor = int(EXPECTED_ANCHOR_Y * scale)
 
-    # --- Deterministic vertical scan window ---
     best_percent = 0
-    best_y = scaled_anchor
 
     for offset in range(-VERTICAL_SCAN_RANGE, VERTICAL_SCAN_RANGE + 1):
         y = scaled_anchor + offset
@@ -78,7 +93,6 @@ def detect_progression_percent(img):
 
         if percent > best_percent:
             best_percent = percent
-            best_y = y
 
     return best_percent
 
@@ -115,7 +129,6 @@ def detect_disease_bars():
 
         pages_found = len(pages)
 
-        # Deterministic: only process first page
         img = np.array(pages[0])
 
         progression_percent = detect_progression_percent(img)
