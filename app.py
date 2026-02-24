@@ -6,15 +6,15 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v44_deterministic_slice_locked_v2"
+ENGINE_NAME = "hsv_v44_deterministic_slice_locked_v3"
 API_KEY = "ithrive_secure_2026_key"
 
 PAGE_HEIGHT = 2200
 PAGE_WIDTH = 1700
 
-# 🔒 Locked disease region (shifted down)
-Y_START = 750
-Y_END = 1950
+# 🔒 Locked disease region (fine-tuned)
+Y_START = 720
+Y_END = 1920
 ROW_COUNT = 24
 ROW_HEIGHT = int((Y_END - Y_START) / ROW_COUNT)
 
@@ -109,29 +109,27 @@ def detect_disease_bars():
 
     results = {}
 
-    for page in pages:
+    # Only process first disease page
+    page = pages[0]
+    image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+    for i in range(ROW_COUNT):
 
-        for i in range(ROW_COUNT):
+        if i >= len(DISEASE_KEYS):
+            break
 
-            if i >= len(DISEASE_KEYS):
-                break
+        y1 = Y_START + i * ROW_HEIGHT
+        y2 = y1 + ROW_HEIGHT
 
-            y1 = Y_START + i * ROW_HEIGHT
-            y2 = y1 + ROW_HEIGHT
+        roi = image[y1:y2, BAR_X_START:BAR_X_END]
 
-            roi = image[y1:y2, BAR_X_START:BAR_X_END]
+        percent = measure_yellow_span(roi)
 
-            percent = measure_yellow_span(roi)
-
-            results[DISEASE_KEYS[i]] = {
-                "progression_percent": percent,
-                "risk_label": risk_label(percent),
-                "source": ENGINE_NAME
-            }
-
-        break  # process only first disease page
+        results[DISEASE_KEYS[i]] = {
+            "progression_percent": percent,
+            "risk_label": risk_label(percent),
+            "source": ENGINE_NAME
+        }
 
     return jsonify({
         "engine": ENGINE_NAME,
