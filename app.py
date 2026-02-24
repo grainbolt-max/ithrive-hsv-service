@@ -1,5 +1,5 @@
 # ===================================================
-# v35 TRACK-ISOLATED STRICT HUE + SATURATION ENGINE
+# v36 TRACK-ISOLATED STRICT HUE + SATURATION (CALIBRATED)
 # Page-aware geometry
 # PyMuPDF @ 300 DPI
 # ===================================================
@@ -11,15 +11,15 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v35_track_isolated_span_locked"
+ENGINE_NAME = "hsv_v36_track_isolated_span_calibrated"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
 # CONFIG
 # ----------------------------
 
-SATURATION_THRESHOLD = 60
-MIN_COLUMN_DENSITY = 0.4  # require 40% of vertical pixels in column
+SATURATION_THRESHOLD = 30
+MIN_COLUMN_DENSITY = 0.4
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
@@ -102,18 +102,16 @@ def analyze_bar(image, base_y, row_index):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask = disease_color_mask(hsv)
 
-    # Column density check (remove stray pixels)
+    # Column density requirement
     col_density = np.sum(mask, axis=0) / mask.shape[0]
     valid_cols = np.where(col_density > MIN_COLUMN_DENSITY)[0]
 
     if len(valid_cols) == 0:
         return 0
 
-    # Detect full track width using dark gray detection
-    # Track ends where dark gray begins consistently
-    v_channel = hsv[:, :, 2]
-    gray_mask = (hsv[:, :, 1] < 30) & (v_channel < 160)
-
+    # Detect dark gray track region
+    v = hsv[:, :, 2]
+    gray_mask = (hsv[:, :, 1] < 25) & (v < 160)
     gray_density = np.sum(gray_mask, axis=0) / gray_mask.shape[0]
     track_end_candidates = np.where(gray_density > 0.6)[0]
 
@@ -138,7 +136,7 @@ def analyze_bar(image, base_y, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v35"
+    return "HSV Preprocess Service Running v36"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
