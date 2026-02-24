@@ -5,19 +5,20 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v84_contiguous_stripe_engine"
+ENGINE_NAME = "v85_strict_stripe_engine"
 API_KEY = "ithrive_secure_2026_key"
 
-TARGET_PAGE_INDEX = 1  # Page 2 visually (0-based)
+TARGET_PAGE_INDEX = 1
 TOP_CROP_RATIO = 0.32
 BOTTOM_CROP_RATIO = 0.06
 ROW_COUNT = 24
 LEFT_SCAN_RATIO = 0.65
 
-SAT_THRESHOLD = 60        # stricter than v83
-VAL_THRESHOLD = 50
-COLUMN_DENSITY_THRESHOLD = 0.15  # % of colored pixels per column
-MAX_GAP_COLUMNS = 3       # tolerate tiny breaks
+# 🔒 STRICT thresholds
+SAT_THRESHOLD = 150
+VAL_THRESHOLD = 60
+COLUMN_DENSITY_THRESHOLD = 0.20
+MAX_GAP_COLUMNS = 2
 
 
 @app.route("/")
@@ -46,7 +47,7 @@ def detect_disease_bars():
 
     h, w, _ = page_img.shape
 
-    # --- Vertical crop ---
+    # ---- Crop out non-disease regions ----
     top_crop = int(h * TOP_CROP_RATIO)
     bottom_crop = int(h * (1 - BOTTOM_CROP_RATIO))
     disease_region = page_img[top_crop:bottom_crop, :]
@@ -60,19 +61,19 @@ def detect_disease_bars():
 
         y1 = i * row_height
         y2 = (i + 1) * row_height if i < ROW_COUNT - 1 else region_h
+
         row_img = disease_region[y1:y2, :]
 
         scan_width = int(region_w * LEFT_SCAN_RATIO)
         scan_region = row_img[:, :scan_width]
 
         hsv = cv2.cvtColor(scan_region, cv2.COLOR_BGR2HSV)
-
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
 
+        # 🔒 STRICT colored mask
         colored_mask = (sat > SAT_THRESHOLD) & (val > VAL_THRESHOLD)
 
-        # --- Column-based contiguous stripe detection ---
         stripe_end_col = 0
         gap_counter = 0
         stripe_active = False
@@ -94,12 +95,12 @@ def detect_disease_bars():
 
         stripe_width_ratio = stripe_end_col / scan_width if stripe_active else 0.0
 
-        # --- Stripe-only HSV average ---
+        # Compute HSV only inside detected stripe
         if stripe_active and stripe_end_col > 0:
             stripe_pixels = colored_mask[:, :stripe_end_col]
             stripe_hsv = hsv[:, :stripe_end_col]
-
             valid_pixels = stripe_pixels > 0
+
             if np.sum(valid_pixels) > 0:
                 avg_h = float(np.mean(stripe_hsv[:, :, 0][valid_pixels]))
                 avg_s = float(np.mean(stripe_hsv[:, :, 1][valid_pixels]))
@@ -111,8 +112,6 @@ def detect_disease_bars():
 
         diagnostics.append({
             "row_index": i + 1,
-            "y_top_absolute": int(top_crop + y1),
-            "y_bottom_absolute": int(top_crop + y2),
             "stripe_width_ratio": round(stripe_width_ratio, 4),
             "avg_hsv": [
                 round(avg_h, 2),
