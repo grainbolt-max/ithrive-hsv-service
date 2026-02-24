@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL HARD-LOCKED PRODUCTION CONSTANTS)
+# DECLARE (FINAL PRODUCTION CONSTANTS)
 # ==================================================
 
-ENGINE_NAME = "v67_two_page_scoped_global_index_width700"
+ENGINE_NAME = "v68_full_24_disease_mapping"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -17,20 +17,43 @@ EXPECTED_PROBE_HEIGHT = 2200
 MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
-
-BAR_MIN_WIDTH = 700      # calibrated width
-BAR_MIN_HEIGHT = 12      # calibrated height
+BAR_MIN_WIDTH = 700
+BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-# Disease bars only exist on first two pages
 DISEASE_PAGE_INDICES = [0, 1]
 
-# --------------------------------------------------
-# FINAL SELECTOR (SET 0–23)
-# Page 1 = 0–11
-# Page 2 = 12–23
-# --------------------------------------------------
-TARGET_GLOBAL_INDEX = 0
+# Page 1 order (top → bottom)
+PAGE_1_DISEASES = [
+    "large_artery_stiffness",
+    "peripheral_vessel",
+    "blood_pressure_uncontrolled",
+    "small_medium_artery_stiffness",
+    "atherosclerosis",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "metabolic_syndrome",
+    "insulin_resistance",
+    "beta_cell_function_decreased",
+    "blood_glucose_uncontrolled",
+    "tissue_inflammatory_process"
+]
+
+# Page 2 order (bottom → top — reversed before mapping)
+PAGE_2_DISEASES = [
+    "hypothyroidism",
+    "hyperthyroidism",
+    "hepatic_fibrosis",
+    "chronic_hepatitis",
+    "prostate_cancer",
+    "respiratory_disorders",
+    "kidney_function_disorders",
+    "digestive_disorders",
+    "major_depression",
+    "adhd_children_learning",
+    "cerebral_dopamine_decreased",
+    "cerebral_serotonin_decreased"
+]
 
 
 # ==================================================
@@ -130,39 +153,48 @@ def compute_bar_fill(img, y_center):
     return int((filled_pixels / total_pixels) * 100)
 
 
-def detect_progression_percent(pages):
+def detect_all_24_diseases(pages):
 
-    global_bars = []
+    results = {}
 
-    for page_index in DISEASE_PAGE_INDICES:
+    # ---------- PAGE 1 ----------
+    page1_img = np.array(pages[0])
+    page1_bars = detect_all_bars_on_page(page1_img)
 
-        if page_index >= len(pages):
-            continue
+    if len(page1_bars) != 12:
+        raise RuntimeError(f"Page 1 expected 12 bars, detected {len(page1_bars)}")
 
-        img = np.array(pages[page_index])
-        bars = detect_all_bars_on_page(img)
+    for disease, y_center in zip(PAGE_1_DISEASES, page1_bars):
+        percent = compute_bar_fill(page1_img, y_center)
+        results[disease] = {
+            "progression_percent": percent,
+            "risk_label": "mild" if percent > 0 else "none",
+            "source": ENGINE_NAME
+        }
 
-        for y_center in bars:
-            global_bars.append((page_index, y_center))
+    # ---------- PAGE 2 ----------
+    page2_img = np.array(pages[1])
+    page2_bars = detect_all_bars_on_page(page2_img)
 
-    total_bars = len(global_bars)
+    if len(page2_bars) != 12:
+        raise RuntimeError(f"Page 2 expected 12 bars, detected {len(page2_bars)}")
 
-    if total_bars == 0:
-        return 0, 0
+    # Reverse detected order before mapping
+    page2_bars_reversed = list(reversed(page2_bars))
 
-    if TARGET_GLOBAL_INDEX >= total_bars:
-        return total_bars, 0
+    for disease, y_center in zip(PAGE_2_DISEASES, page2_bars_reversed):
+        percent = compute_bar_fill(page2_img, y_center)
+        results[disease] = {
+            "progression_percent": percent,
+            "risk_label": "mild" if percent > 0 else "none",
+            "source": ENGINE_NAME
+        }
 
-    page_index, y_center = global_bars[TARGET_GLOBAL_INDEX]
-    img = np.array(pages[page_index])
-
-    percent = compute_bar_fill(img, y_center)
-
-    return total_bars, percent
+    return results
 
 
 # ==================================================
-# OUTPUT (API ROUTES)
+# OUTPUT
 # ==================================================
 
 @app.route("/")
@@ -191,22 +223,14 @@ def detect_disease_bars():
             single_file=False
         )
 
-        pages_found = len(pages)
+        if len(pages) < 2:
+            raise RuntimeError("PDF does not contain required pages")
 
-        bars_detected, progression_percent = detect_progression_percent(pages)
-
-        results = {
-            "selected_row": {
-                "progression_percent": progression_percent,
-                "risk_label": "mild" if progression_percent > 0 else "none",
-                "source": ENGINE_NAME
-            }
-        }
+        results = detect_all_24_diseases(pages)
 
         return jsonify({
             "engine": ENGINE_NAME,
-            "pages_found": pages_found,
-            "bars_detected_total": bars_detected,
+            "pages_found": len(pages),
             "results": results
         })
 
