@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (RELAXED CAPTURE + THICKNESS RANKING)
+# DECLARE (STABLE V67 DETECTION + COLOR CLASSIFIER)
 # ==================================================
 
-ENGINE_NAME = "v72_full_24_disease_mapping_thickness_ranked_relaxed"
+ENGINE_NAME = "v73_full_24_color_detection"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -17,12 +17,11 @@ EXPECTED_PROBE_HEIGHT = 2200
 MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
-
-# Relaxed capture thresholds
-BAR_MIN_WIDTH = 400
-BAR_MIN_HEIGHT = 6
+BAR_MIN_WIDTH = 700
+BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
+# Page 1 order (top → bottom)
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
@@ -38,6 +37,7 @@ PAGE_1_DISEASES = [
     "tissue_inflammatory_process"
 ]
 
+# Page 2 order (bottom → top)
 PAGE_2_DISEASES = [
     "hypothyroidism",
     "hyperthyroidism",
@@ -55,11 +55,10 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# APPLY
+# DETECTION (EXACT v67 LOGIC — UNCHANGED)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
-
     y_top = start_y
     y_bottom = start_y
 
@@ -80,7 +79,7 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
     return y_top, y_bottom
 
 
-def detect_all_horizontal_bands(img):
+def detect_all_bars_on_page(img):
 
     runtime_height, _, _ = img.shape
 
@@ -93,7 +92,7 @@ def detect_all_horizontal_bands(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
-    bands = []
+    detected = []
     y = 10
 
     while y < runtime_height - 10:
@@ -103,7 +102,6 @@ def detect_all_horizontal_bands(img):
         nonzero = np.where(col_mask)[0]
 
         if len(nonzero) > 0:
-
             x_start = nonzero[0]
             x_end = nonzero[-1]
 
@@ -116,88 +114,105 @@ def detect_all_horizontal_bands(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
-
-                    bands.append({
-                        "center": (y_top + y_bottom) // 2,
-                        "height": band_height
-                    })
-
-                    y = y_bottom + 5
+                    detected.append((y_top + y_bottom) // 2)
+                    y = y_bottom + 10
                     continue
 
         y += VERTICAL_SCAN_STEP
 
-    return bands
+    return sorted(detected)
 
 
-def select_top_12_by_thickness(bands):
+# ==================================================
+# COLOR CLASSIFICATION
+# ==================================================
 
-    if len(bands) < 12:
-        raise RuntimeError(f"Expected at least 12 bands, detected {len(bands)}")
-
-    bands_sorted = sorted(bands, key=lambda x: x["height"], reverse=True)
-    top_12 = bands_sorted[:12]
-    top_12_sorted_vertical = sorted(top_12, key=lambda x: x["center"])
-
-    return [b["center"] for b in top_12_sorted_vertical]
-
-
-def compute_bar_fill(img, y_center):
+def classify_color_from_bar(img, y_center):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
+    # find left edge of fill
     row = value[y_center, :]
     col_mask = row < VALUE_NONWHITE_THRESHOLD
     nonzero = np.where(col_mask)[0]
 
     if len(nonzero) == 0:
-        return 0
+        return "none"
 
     x_start = nonzero[0]
-    x_end = nonzero[-1]
 
-    y_top, y_bottom = measure_vertical_band(
-        value, y_center, x_start, x_end, value.shape[0]
-    )
+    # sample small patch at far left of bar
+    y1 = max(0, y_center - 3)
+    y2 = min(img.shape[0], y_center + 3)
+    x1 = x_start + 5
+    x2 = min(img.shape[1], x_start + 40)
 
-    bar_region = value[y_top:y_bottom, x_start:x_end]
+    sample = hsv[y1:y2, x1:x2]
 
-    filled_pixels = np.sum(bar_region < VALUE_NONWHITE_THRESHOLD)
-    total_pixels = bar_region.size
+    avg_h = np.mean(sample[:, :, 0])
+    avg_s = np.mean(sample[:, :, 1])
 
-    return int((filled_pixels / total_pixels) * 100)
+    # Grey (none/Low)
+    if avg_s < 25:
+        return "none"
 
+    # Red (Severe)
+    if avg_h <= 10 or avg_h >= 170:
+        return "severe"
+
+    # Orange (Moderate)
+    if 10 < avg_h <= 20:
+        return "moderate"
+
+    # Yellow (Mild)
+    if 20 < avg_h <= 35:
+        return "mild"
+
+    return "none"
+
+
+# ==================================================
+# MAIN 24-DISEASE MAPPING
+# ==================================================
 
 def detect_all_24_diseases(pages):
 
+    global_bars = []
+
+    # detect bars globally across pages 1 & 2
+    for page_index in [0, 1]:
+        img = np.array(pages[page_index])
+        bars = detect_all_bars_on_page(img)
+        for y_center in bars:
+            global_bars.append((page_index, y_center))
+
+    if len(global_bars) != 24:
+        raise RuntimeError(f"Expected 24 total bars, detected {len(global_bars)}")
+
     results = {}
 
-    # PAGE 1
-    page1_img = np.array(pages[0])
-    page1_bands = detect_all_horizontal_bands(page1_img)
-    page1_centers = select_top_12_by_thickness(page1_bands)
+    # split into two halves
+    page1_bars = global_bars[:12]
+    page2_bars = global_bars[12:]
 
-    for disease, y_center in zip(PAGE_1_DISEASES, page1_centers):
-        percent = compute_bar_fill(page1_img, y_center)
+    # PAGE 1 (normal order)
+    for disease, (page_index, y_center) in zip(PAGE_1_DISEASES, page1_bars):
+        img = np.array(pages[page_index])
+        risk = classify_color_from_bar(img, y_center)
         results[disease] = {
-            "progression_percent": percent,
-            "risk_label": "mild" if percent > 0 else "none",
+            "risk_label": risk,
             "source": ENGINE_NAME
         }
 
-    # PAGE 2
-    page2_img = np.array(pages[1])
-    page2_bands = detect_all_horizontal_bands(page2_img)
-    page2_centers = select_top_12_by_thickness(page2_bands)
+    # PAGE 2 (reverse)
+    page2_bars_reversed = list(reversed(page2_bars))
 
-    page2_centers_reversed = list(reversed(page2_centers))
-
-    for disease, y_center in zip(PAGE_2_DISEASES, page2_centers_reversed):
-        percent = compute_bar_fill(page2_img, y_center)
+    for disease, (page_index, y_center) in zip(PAGE_2_DISEASES, page2_bars_reversed):
+        img = np.array(pages[page_index])
+        risk = classify_color_from_bar(img, y_center)
         results[disease] = {
-            "progression_percent": percent,
-            "risk_label": "mild" if percent > 0 else "none",
+            "risk_label": risk,
             "source": ENGINE_NAME
         }
 
@@ -233,9 +248,6 @@ def detect_disease_bars():
             fmt="png",
             single_file=False
         )
-
-        if len(pages) < 2:
-            raise RuntimeError("PDF does not contain required pages")
 
         results = detect_all_24_diseases(pages)
 
