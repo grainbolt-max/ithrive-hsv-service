@@ -6,13 +6,87 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "geometry_probe_v1"
+ENGINE_NAME = "hsv_v44_deterministic_slice_locked"
 API_KEY = "ithrive_secure_2026_key"
+
+PAGE_HEIGHT = 2200
+PAGE_WIDTH = 1700
+
+# Locked disease region
+Y_START = 650
+Y_END = 1850
+ROW_COUNT = 24
+ROW_HEIGHT = int((Y_END - Y_START) / ROW_COUNT)
+
+# Locked bar horizontal region
+BAR_X_START = 700
+BAR_X_END = 1600
+
+
+def risk_label(percent):
+    if percent >= 75:
+        return "severe"
+    elif percent >= 50:
+        return "moderate"
+    elif percent >= 20:
+        return "mild"
+    elif percent > 0:
+        return "normal"
+    else:
+        return "none"
+
+
+def measure_yellow_span(roi):
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+    # Pure yellow detection tuned tight
+    lower_yellow = np.array([20, 120, 120])
+    upper_yellow = np.array([38, 255, 255])
+
+    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    ys, xs = np.where(mask > 0)
+
+    if len(xs) == 0:
+        return 0
+
+    span = xs.max() - xs.min()
+    percent = int((span / roi.shape[1]) * 100)
+
+    return min(percent, 100)
+
+
+DISEASE_KEYS = [
+    "adhd_children_learning",
+    "atherosclerosis",
+    "beta_cell_function_decreased",
+    "blood_glucose_uncontrolled",
+    "blood_pressure_uncontrolled",
+    "cerebral_dopamine_decreased",
+    "cerebral_serotonin_decreased",
+    "chronic_hepatitis",
+    "digestive_disorders",
+    "hepatic_fibrosis",
+    "hyperthyroidism",
+    "hypothyroidism",
+    "insulin_resistance",
+    "kidney_function_disorders",
+    "large_artery_stiffness",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "major_depression",
+    "metabolic_syndrome",
+    "peripheral_vessel",
+    "prostate_cancer",
+    "respiratory_disorders",
+    "small_medium_artery_stiffness",
+    "tissue_inflammatory_process"
+]
 
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running geometry_probe_v1"
+    return "HSV Preprocess Service Running v44"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -30,29 +104,39 @@ def detect_disease_bars():
 
     try:
         pages = convert_from_bytes(pdf_bytes, dpi=200)
-    except Exception as e:
-        return jsonify({"error": "PDF conversion failed", "details": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "PDF conversion failed"}), 500
 
-    page_count = 0
-    page_shapes = []
+    results = {}
 
     for page in pages:
-        page_count += 1
 
         image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        # PRINT TO RENDER LOGS
-        print("PAGE SHAPE:", image.shape)
+        for i in range(ROW_COUNT):
 
-        page_shapes.append({
-            "height": image.shape[0],
-            "width": image.shape[1]
-        })
+            if i >= len(DISEASE_KEYS):
+                break
+
+            y1 = Y_START + i * ROW_HEIGHT
+            y2 = y1 + ROW_HEIGHT
+
+            roi = image[y1:y2, BAR_X_START:BAR_X_END]
+
+            percent = measure_yellow_span(roi)
+
+            results[DISEASE_KEYS[i]] = {
+                "progression_percent": percent,
+                "risk_label": risk_label(percent),
+                "source": ENGINE_NAME
+            }
+
+        break  # only first disease page processed
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "pages_found": page_count,
-        "page_shapes": page_shapes
+        "pages_found": len(pages),
+        "results": results
     })
 
 
