@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL STRUCTURAL FILTERING CONSTANTS)
+# DECLARE (FINAL THICKNESS-RANKED ENGINE)
 # ==================================================
 
-ENGINE_NAME = "v70_full_24_disease_mapping_left_anchor_filtered"
+ENGINE_NAME = "v71_full_24_disease_mapping_thickness_ranked"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -18,12 +18,8 @@ MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
 BAR_MIN_WIDTH = 700
-BAR_MIN_HEIGHT = 12
+BAR_MIN_HEIGHT = 8      # lower baseline — ranking handles filtering
 VERTICAL_SCAN_STEP = 2
-
-# NEW: left margin anchor window (calibrated structural constraint)
-MIN_BAR_LEFT_X = 350
-MAX_BAR_LEFT_X = 550
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -82,6 +78,54 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
     return y_top, y_bottom
 
 
+def detect_all_horizontal_bands(img):
+
+    runtime_height, _, _ = img.shape
+
+    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
+    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
+        raise RuntimeError(
+            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
+        )
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    value = hsv[:, :, 2]
+
+    bands = []
+    y = 10
+
+    while y < runtime_height - 10:
+
+        row = value[y, :]
+        col_mask = row < VALUE_NONWHITE_THRESHOLD
+        nonzero = np.where(col_mask)[0]
+
+        if len(nonzero) > 0:
+            x_start = nonzero[0]
+            x_end = nonzero[-1]
+
+            if (x_end - x_start) > BAR_MIN_WIDTH:
+
+                y_top, y_bottom = measure_vertical_band(
+                    value, y, x_start, x_end, runtime_height
+                )
+
+                band_height = y_bottom - y_top
+
+                if band_height >= BAR_MIN_HEIGHT:
+                    bands.append({
+                        "center": (y_top + y_bottom) // 2,
+                        "height": band_height
+                    })
+
+                    y = y_bottom + 10
+                    continue
+
+        y += VERTICAL_SCAN_STEP
+
+    return bands
+
+
 def compute_bar_fill(img, y_center):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -109,54 +153,21 @@ def compute_bar_fill(img, y_center):
     return int((filled_pixels / total_pixels) * 100)
 
 
-def detect_all_bars_on_page(img):
+def select_top_12_by_thickness(bands):
 
-    runtime_height, _, _ = img.shape
+    if len(bands) < 12:
+        raise RuntimeError(f"Expected at least 12 bands, detected {len(bands)}")
 
-    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
-    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
-        raise RuntimeError(
-            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
-        )
+    # Sort by height descending
+    bands_sorted = sorted(bands, key=lambda x: x["height"], reverse=True)
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    value = hsv[:, :, 2]
+    # Take top 12 thickest
+    top_12 = bands_sorted[:12]
 
-    detected = []
-    y = 10
+    # Restore vertical order
+    top_12_sorted_vertical = sorted(top_12, key=lambda x: x["center"])
 
-    while y < runtime_height - 10:
-
-        row = value[y, :]
-        col_mask = row < VALUE_NONWHITE_THRESHOLD
-        nonzero = np.where(col_mask)[0]
-
-        if len(nonzero) > 0:
-
-            x_start = nonzero[0]
-            x_end = nonzero[-1]
-
-            # NEW: enforce structural left anchor window
-            if not (MIN_BAR_LEFT_X <= x_start <= MAX_BAR_LEFT_X):
-                y += VERTICAL_SCAN_STEP
-                continue
-
-            if (x_end - x_start) > BAR_MIN_WIDTH:
-
-                y_top, y_bottom = measure_vertical_band(
-                    value, y, x_start, x_end, runtime_height
-                )
-
-                band_height = y_bottom - y_top
-
-                if band_height >= BAR_MIN_HEIGHT:
-                    detected.append((y_top + y_bottom) // 2)
-                    y = y_bottom + 10
-                    continue
-
-        y += VERTICAL_SCAN_STEP
-
-    return sorted(detected)
+    return [b["center"] for b in top_12_sorted_vertical]
 
 
 def detect_all_24_diseases(pages):
@@ -165,12 +176,10 @@ def detect_all_24_diseases(pages):
 
     # ---------- PAGE 1 ----------
     page1_img = np.array(pages[0])
-    page1_bars = detect_all_bars_on_page(page1_img)
+    page1_bands = detect_all_horizontal_bands(page1_img)
+    page1_centers = select_top_12_by_thickness(page1_bands)
 
-    if len(page1_bars) != 12:
-        raise RuntimeError(f"Page 1 expected 12 bars, detected {len(page1_bars)}")
-
-    for disease, y_center in zip(PAGE_1_DISEASES, page1_bars):
+    for disease, y_center in zip(PAGE_1_DISEASES, page1_centers):
         percent = compute_bar_fill(page1_img, y_center)
         results[disease] = {
             "progression_percent": percent,
@@ -180,14 +189,13 @@ def detect_all_24_diseases(pages):
 
     # ---------- PAGE 2 ----------
     page2_img = np.array(pages[1])
-    page2_bars = detect_all_bars_on_page(page2_img)
+    page2_bands = detect_all_horizontal_bands(page2_img)
+    page2_centers = select_top_12_by_thickness(page2_bands)
 
-    if len(page2_bars) != 12:
-        raise RuntimeError(f"Page 2 expected 12 bars, detected {len(page2_bars)}")
+    # Reverse for correct logical order
+    page2_centers_reversed = list(reversed(page2_centers))
 
-    page2_bars_reversed = list(reversed(page2_bars))
-
-    for disease, y_center in zip(PAGE_2_DISEASES, page2_bars_reversed):
+    for disease, y_center in zip(PAGE_2_DISEASES, page2_centers_reversed):
         percent = compute_bar_fill(page2_img, y_center)
         results[disease] = {
             "progression_percent": percent,
