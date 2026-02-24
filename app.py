@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (FINAL PRODUCTION CONSTANTS)
 # ==================================================
 
-ENGINE_NAME = "v68_full_24_disease_mapping"
+ENGINE_NAME = "v69_full_24_disease_mapping_divider_filtered"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -23,7 +23,6 @@ VERTICAL_SCAN_STEP = 2
 
 DISEASE_PAGE_INDICES = [0, 1]
 
-# Page 1 order (top → bottom)
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
@@ -39,7 +38,6 @@ PAGE_1_DISEASES = [
     "tissue_inflammatory_process"
 ]
 
-# Page 2 order (bottom → top — reversed before mapping)
 PAGE_2_DISEASES = [
     "hypothyroidism",
     "hyperthyroidism",
@@ -82,6 +80,33 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
     return y_top, y_bottom
 
 
+def compute_bar_fill(img, y_center):
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    value = hsv[:, :, 2]
+
+    row = value[y_center, :]
+    col_mask = row < VALUE_NONWHITE_THRESHOLD
+    nonzero = np.where(col_mask)[0]
+
+    if len(nonzero) == 0:
+        return 0
+
+    x_start = nonzero[0]
+    x_end = nonzero[-1]
+
+    y_top, y_bottom = measure_vertical_band(
+        value, y_center, x_start, x_end, value.shape[0]
+    )
+
+    bar_region = value[y_top:y_bottom, x_start:x_end]
+
+    filled_pixels = np.sum(bar_region < VALUE_NONWHITE_THRESHOLD)
+    total_pixels = bar_region.size
+
+    return int((filled_pixels / total_pixels) * 100)
+
+
 def detect_all_bars_on_page(img):
 
     runtime_height, _, _ = img.shape
@@ -117,40 +142,19 @@ def detect_all_bars_on_page(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
-                    detected.append((y_top + y_bottom) // 2)
+
+                    # NEW: compute fill and reject full-width dividers
+                    fill_percent = compute_bar_fill(img, (y_top + y_bottom) // 2)
+
+                    if fill_percent < 99:  # divider filter
+                        detected.append((y_top + y_bottom) // 2)
+
                     y = y_bottom + 10
                     continue
 
         y += VERTICAL_SCAN_STEP
 
     return sorted(detected)
-
-
-def compute_bar_fill(img, y_center):
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    value = hsv[:, :, 2]
-
-    row = value[y_center, :]
-    col_mask = row < VALUE_NONWHITE_THRESHOLD
-    nonzero = np.where(col_mask)[0]
-
-    if len(nonzero) == 0:
-        return 0
-
-    x_start = nonzero[0]
-    x_end = nonzero[-1]
-
-    y_top, y_bottom = measure_vertical_band(
-        value, y_center, x_start, x_end, value.shape[0]
-    )
-
-    bar_region = value[y_top:y_bottom, x_start:x_end]
-
-    filled_pixels = np.sum(bar_region < VALUE_NONWHITE_THRESHOLD)
-    total_pixels = bar_region.size
-
-    return int((filled_pixels / total_pixels) * 100)
 
 
 def detect_all_24_diseases(pages):
@@ -179,7 +183,6 @@ def detect_all_24_diseases(pages):
     if len(page2_bars) != 12:
         raise RuntimeError(f"Page 2 expected 12 bars, detected {len(page2_bars)}")
 
-    # Reverse detected order before mapping
     page2_bars_reversed = list(reversed(page2_bars))
 
     for disease, y_center in zip(PAGE_2_DISEASES, page2_bars_reversed):
