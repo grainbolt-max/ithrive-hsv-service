@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v63_multi_page_global_index_lock"
+ENGINE_NAME = "v64_two_page_scoped_global_index"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -22,7 +22,11 @@ BAR_MIN_WIDTH = 600
 BAR_MIN_HEIGHT = 14
 VERTICAL_SCAN_STEP = 2
 
-TARGET_GLOBAL_INDEX = 0  # <-- SET 0–23
+# Only scan page 1 and 2 (zero-based indices 0 and 1)
+DISEASE_PAGE_INDICES = [0, 1]
+
+# Final selector: 0–23
+TARGET_GLOBAL_INDEX = 0
 
 
 # =========================
@@ -126,10 +130,12 @@ def detect_progression_percent(pages):
 
     global_bars = []
 
-    # Collect bars from all pages in order
-    for page_index, page in enumerate(pages):
+    for page_index in DISEASE_PAGE_INDICES:
 
-        img = np.array(page)
+        if page_index >= len(pages):
+            continue
+
+        img = np.array(pages[page_index])
         bars = detect_all_bars_on_page(img)
 
         for y_center in bars:
