@@ -6,7 +6,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v50_gray_track_hsv_locked"
+ENGINE_NAME = "hsv_v51_contour_locked_deterministic"
 API_KEY = "ithrive_secure_2026_key"
 
 DISEASE_KEYS = [
@@ -52,53 +52,49 @@ def risk_label(percent):
 
 def detect_track_bands(image):
     """
-    Detect horizontal gray track bars using HSV.
+    Detect horizontal track rectangles using contour geometry.
     """
 
     h, w, _ = image.shape
 
-    # Crop only lower-right panel where tracks exist
-    panel = image[int(h * 0.38):int(h * 0.92),
-                  int(w * 0.48):int(w * 0.98)]
+    # Crop right panel
+    panel = image[int(h * 0.35):int(h * 0.92),
+                  int(w * 0.45):int(w * 0.98)]
 
-    hsv = cv2.cvtColor(panel, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY)
 
-    # Detect gray tracks via low saturation + mid value
-    lower_gray = np.array([0, 0, 80])
-    upper_gray = np.array([180, 40, 160])
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    mask = cv2.inRange(hsv, lower_gray, upper_gray)
+    thresh = cv2.adaptiveThreshold(
+        blur,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        21,
+        5
+    )
 
-    # Sum mask per row
-    row_sum = np.sum(mask, axis=1)
+    # Emphasize horizontal shapes
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 5))
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-    if np.max(row_sum) == 0:
-        return []
+    contours, _ = cv2.findContours(
+        morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
-    row_sum = row_sum / np.max(row_sum)
+    centers = []
 
-    # Threshold for strong horizontal presence
-    band_rows = np.where(row_sum > 0.45)[0]
+    for cnt in contours:
+        x, y, cw, ch = cv2.boundingRect(cnt)
 
-    if len(band_rows) == 0:
-        return []
+        # Filter by geometry
+        if cw > panel.shape[1] * 0.6 and 10 < ch < 35:
+            center_y = y + ch // 2
+            centers.append(center_y)
 
-    # Group contiguous rows into bands
-    bands = []
-    current = [band_rows[0]]
-
-    for idx in band_rows[1:]:
-        if idx - current[-1] <= 4:
-            current.append(idx)
-        else:
-            bands.append(current)
-            current = [idx]
-
-    bands.append(current)
-
-    # Convert band centers to full-image coordinates
-    offset_y = int(h * 0.38)
-    centers = [int(np.mean(b)) + offset_y for b in bands]
+    # Convert back to full image coordinates
+    offset_y = int(h * 0.35)
+    centers = [c + offset_y for c in centers]
 
     return sorted(centers)
 
@@ -138,7 +134,7 @@ def measure_yellow_span(image, center_y):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v50"
+    return "HSV Preprocess Service Running v51"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -159,7 +155,6 @@ def detect_disease_bars():
     except Exception:
         return jsonify({"error": "PDF conversion failed"}), 500
 
-    # Disease bars are on page index 1
     page = pages[1]
     image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
