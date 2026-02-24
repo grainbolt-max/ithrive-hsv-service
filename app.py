@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v59_deterministic_scaled_window_autoX"
+ENGINE_NAME = "v60_deterministic_value_based_detection"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -22,8 +22,8 @@ MAX_HEIGHT_DRIFT_RATIO = 0.03
 BAR_SAMPLE_THICKNESS = 4
 VERTICAL_SCAN_RANGE = 60
 
-SATURATION_THRESHOLD = 30
-MIN_BAR_WIDTH = 200  # fail if detected bar too narrow
+VALUE_NONWHITE_THRESHOLD = 245   # Anything below this is considered non-white
+MIN_BAR_WIDTH = 200              # Fail if detected region too narrow
 
 
 # =========================
@@ -43,11 +43,10 @@ def compute_progression_for_y(img, y):
     row_slice = img[y1:y2, :]
 
     hsv = cv2.cvtColor(row_slice, cv2.COLOR_BGR2HSV)
-    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
 
-    # Horizontal projection
-    col_mask = np.mean(saturation, axis=0) > SATURATION_THRESHOLD
-
+    # Detect non-white columns using brightness
+    col_mask = np.mean(value, axis=0) < VALUE_NONWHITE_THRESHOLD
     nonzero_indices = np.where(col_mask)[0]
 
     if len(nonzero_indices) == 0:
@@ -59,9 +58,9 @@ def compute_progression_for_y(img, y):
     if (x_end - x_start) < MIN_BAR_WIDTH:
         return 0
 
-    bar_region = saturation[:, x_start:x_end]
+    bar_region = value[:, x_start:x_end]
 
-    filled_pixels = np.sum(bar_region > SATURATION_THRESHOLD)
+    filled_pixels = np.sum(bar_region < VALUE_NONWHITE_THRESHOLD)
     total_pixels = bar_region.size
 
     return int((filled_pixels / total_pixels) * 100)
