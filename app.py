@@ -1,8 +1,8 @@
-# ============================================
-# v34 STRICT HUE + SATURATION SPAN LOCKED
-# PAGE-AWARE GEOMETRY
+# ===================================================
+# v35 TRACK-ISOLATED STRICT HUE + SATURATION ENGINE
+# Page-aware geometry
 # PyMuPDF @ 300 DPI
-# ============================================
+# ===================================================
 
 import fitz
 import cv2
@@ -11,14 +11,15 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v34_strict_hue_saturation_span_locked"
+ENGINE_NAME = "hsv_v35_track_isolated_span_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
-# DETECTION CONFIG
+# CONFIG
 # ----------------------------
 
 SATURATION_THRESHOLD = 60
+MIN_COLUMN_DENSITY = 0.4  # require 40% of vertical pixels in column
 
 BAR_LEFT = 350
 BAR_RIGHT = 1100
@@ -29,7 +30,6 @@ PAGE1_ROW_START_Y = 455
 PAGE2_ROW_START_Y = 430
 
 DISEASE_ORDER = [
-    # Page 1
     "large_artery_stiffness",
     "peripheral_vessel",
     "blood_pressure_uncontrolled",
@@ -42,8 +42,6 @@ DISEASE_ORDER = [
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
     "tissue_inflammatory_process",
-
-    # Page 2
     "hypothyroidism",
     "hyperthyroidism",
     "hepatic_fibrosis",
@@ -59,7 +57,7 @@ DISEASE_ORDER = [
 ]
 
 # ----------------------------
-# RISK MAPPING
+# RISK LABEL
 # ----------------------------
 
 def risk_label_from_percent(p):
@@ -75,7 +73,7 @@ def risk_label_from_percent(p):
         return "none"
 
 # ----------------------------
-# COLOR MASK (YELLOW / ORANGE / RED ONLY)
+# DISEASE COLOR MASK
 # ----------------------------
 
 def disease_color_mask(hsv):
@@ -86,12 +84,10 @@ def disease_color_mask(hsv):
     orange_mask = (h > 10) & (h <= 20)
     yellow_mask = (h > 20) & (h <= 35)
 
-    color_mask = (s > SATURATION_THRESHOLD) & (red_mask | orange_mask | yellow_mask)
-
-    return color_mask
+    return (s > SATURATION_THRESHOLD) & (red_mask | orange_mask | yellow_mask)
 
 # ----------------------------
-# BAR ANALYSIS
+# ANALYZE BAR
 # ----------------------------
 
 def analyze_bar(image, base_y, row_index):
@@ -104,16 +100,35 @@ def analyze_bar(image, base_y, row_index):
         return 0
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
     mask = disease_color_mask(hsv)
 
-    cols = np.where(np.any(mask, axis=0))[0]
+    # Column density check (remove stray pixels)
+    col_density = np.sum(mask, axis=0) / mask.shape[0]
+    valid_cols = np.where(col_density > MIN_COLUMN_DENSITY)[0]
 
-    if len(cols) == 0:
+    if len(valid_cols) == 0:
         return 0
 
-    rightmost = cols[-1]
-    percent = int((rightmost / roi.shape[1]) * 100)
+    # Detect full track width using dark gray detection
+    # Track ends where dark gray begins consistently
+    v_channel = hsv[:, :, 2]
+    gray_mask = (hsv[:, :, 1] < 30) & (v_channel < 160)
+
+    gray_density = np.sum(gray_mask, axis=0) / gray_mask.shape[0]
+    track_end_candidates = np.where(gray_density > 0.6)[0]
+
+    if len(track_end_candidates) == 0:
+        track_width = roi.shape[1]
+    else:
+        track_width = track_end_candidates[0]
+
+    if track_width <= 5:
+        return 0
+
+    fill_end = valid_cols[-1]
+
+    percent = int((fill_end / track_width) * 100)
+    percent = max(0, min(percent, 100))
 
     return percent
 
@@ -123,7 +138,7 @@ def analyze_bar(image, base_y, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v34"
+    return "HSV Preprocess Service Running v35"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
