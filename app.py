@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL PRODUCTION CONSTANTS)
+# DECLARE (FINAL STRUCTURAL FILTERING CONSTANTS)
 # ==================================================
 
-ENGINE_NAME = "v69_full_24_disease_mapping_divider_filtered"
+ENGINE_NAME = "v70_full_24_disease_mapping_left_anchor_filtered"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -21,7 +21,9 @@ BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-DISEASE_PAGE_INDICES = [0, 1]
+# NEW: left margin anchor window (calibrated structural constraint)
+MIN_BAR_LEFT_X = 350
+MAX_BAR_LEFT_X = 550
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -130,8 +132,14 @@ def detect_all_bars_on_page(img):
         nonzero = np.where(col_mask)[0]
 
         if len(nonzero) > 0:
+
             x_start = nonzero[0]
             x_end = nonzero[-1]
+
+            # NEW: enforce structural left anchor window
+            if not (MIN_BAR_LEFT_X <= x_start <= MAX_BAR_LEFT_X):
+                y += VERTICAL_SCAN_STEP
+                continue
 
             if (x_end - x_start) > BAR_MIN_WIDTH:
 
@@ -142,13 +150,7 @@ def detect_all_bars_on_page(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
-
-                    # NEW: compute fill and reject full-width dividers
-                    fill_percent = compute_bar_fill(img, (y_top + y_bottom) // 2)
-
-                    if fill_percent < 99:  # divider filter
-                        detected.append((y_top + y_bottom) // 2)
-
+                    detected.append((y_top + y_bottom) // 2)
                     y = y_bottom + 10
                     continue
 
