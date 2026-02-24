@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (V67 DETECTION + RAW HSV CALIBRATION)
+# DECLARE (FINAL PRODUCTION ENGINE)
 # ==================================================
 
-ENGINE_NAME = "v75_full_24_color_calibration"
+ENGINE_NAME = "v76_full_24_color_detection_production"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -20,6 +20,13 @@ VALUE_NONWHITE_THRESHOLD = 245
 BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
+
+# Hue thresholds calibrated from real data
+RED_MAX = 8
+ORANGE_MAX = 20
+YELLOW_MAX = 40
+
+SATURATION_THRESHOLD = 60  # Detect stripe pixels only
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -53,7 +60,7 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# DETECTION (UNCHANGED V67)
+# DETECTION (STABLE V67 LOGIC)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -122,10 +129,10 @@ def detect_all_bars_on_page(img):
 
 
 # ==================================================
-# RAW HSV EXTRACTION
+# COLOR CLASSIFICATION (STRIPE-BASED)
 # ==================================================
 
-def extract_hsv_from_bar(img, y_center):
+def classify_color_from_bar(img, y_center):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
@@ -135,42 +142,49 @@ def extract_hsv_from_bar(img, y_center):
     nonzero = np.where(col_mask)[0]
 
     if len(nonzero) == 0:
-        return {"avg_h": None, "avg_s": None, "avg_v": None}
+        return "none"
 
     x_start = nonzero[0]
 
-    y1 = max(0, y_center - 3)
-    y2 = min(img.shape[0], y_center + 3)
+    # Wider sampling window to capture stripes
+    y1 = max(0, y_center - 4)
+    y2 = min(img.shape[0], y_center + 4)
     x1 = x_start + 5
-    x2 = min(img.shape[1], x_start + 40)
+    x2 = min(img.shape[1], x_start + 80)
 
     sample = hsv[y1:y2, x1:x2]
 
     sat = sample[:, :, 1]
     hue = sample[:, :, 0]
-    val = sample[:, :, 2]
 
-    mask = sat > 40  # Ignore white separators
+    # Only keep colored stripe pixels
+    mask = sat > SATURATION_THRESHOLD
 
     if np.sum(mask) == 0:
-        return {
-            "avg_h": float(np.mean(hue)),
-            "avg_s": float(np.mean(sat)),
-            "avg_v": float(np.mean(val))
-        }
+        return "none"
 
-    return {
-        "avg_h": float(np.mean(hue[mask])),
-        "avg_s": float(np.mean(sat[mask])),
-        "avg_v": float(np.mean(val[mask]))
-    }
+    dominant_hue = float(np.mean(hue[mask]))
+
+    # Severe (Red)
+    if dominant_hue <= RED_MAX or dominant_hue >= 170:
+        return "severe"
+
+    # Moderate (Orange)
+    if RED_MAX < dominant_hue <= ORANGE_MAX:
+        return "moderate"
+
+    # Mild (Yellow)
+    if ORANGE_MAX < dominant_hue <= YELLOW_MAX:
+        return "mild"
+
+    return "none"
 
 
 # ==================================================
-# MAIN
+# MAIN 24-DISEASE MAPPING
 # ==================================================
 
-def calibrate_all_24(pages):
+def detect_all_24_diseases(pages):
 
     global_bars = []
 
@@ -191,11 +205,19 @@ def calibrate_all_24(pages):
 
     for disease, (page_index, y_center) in zip(PAGE_1_DISEASES, page1_bars):
         img = np.array(pages[page_index])
-        results[disease] = extract_hsv_from_bar(img, y_center)
+        risk = classify_color_from_bar(img, y_center)
+        results[disease] = {
+            "risk_label": risk,
+            "source": ENGINE_NAME
+        }
 
     for disease, (page_index, y_center) in zip(PAGE_2_DISEASES, page2_bars_reversed):
         img = np.array(pages[page_index])
-        results[disease] = extract_hsv_from_bar(img, y_center)
+        risk = classify_color_from_bar(img, y_center)
+        results[disease] = {
+            "risk_label": risk,
+            "source": ENGINE_NAME
+        }
 
     return results
 
@@ -230,7 +252,7 @@ def detect_disease_bars():
             single_file=False
         )
 
-        results = calibrate_all_24(pages)
+        results = detect_all_24_diseases(pages)
 
         return jsonify({
             "engine": ENGINE_NAME,
