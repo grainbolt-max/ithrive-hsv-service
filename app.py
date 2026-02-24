@@ -6,7 +6,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v42_low_sat_track_locked"
+ENGINE_NAME = "hsv_v43_geometry_first_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 
@@ -26,7 +26,7 @@ def risk_label(percent):
 def detect_yellow_span(track_roi):
     hsv = cv2.cvtColor(track_roi, cv2.COLOR_BGR2HSV)
 
-    lower_yellow = np.array([20, 80, 80])
+    lower_yellow = np.array([20, 90, 90])
     upper_yellow = np.array([40, 255, 255])
 
     mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -37,29 +37,38 @@ def detect_yellow_span(track_roi):
         return 0
 
     span = xs.max() - xs.min()
-
     percent = int((span / track_roi.shape[1]) * 100)
+
     return min(percent, 100)
 
 
-def find_tracks(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+def find_horizontal_tracks(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    sat = hsv[:, :, 1]
-    val = hsv[:, :, 2]
+    # Edge detection
+    edges = cv2.Canny(gray, 50, 150)
 
-    gray_mask = np.logical_and(sat < 40, val > 120)
-    gray_mask = gray_mask.astype(np.uint8) * 255
+    # Dilate horizontally to merge bar edges
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 3))
+    dilated = cv2.dilate(edges, kernel, iterations=1)
 
-    contours, _ = cv2.findContours(gray_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     tracks = []
 
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
 
-        if w > image.shape[1] * 0.5 and 10 < h < 40:
-            tracks.append((x, y, w, h))
+        # LONG horizontal rectangles only
+        if w > image.shape[1] * 0.4 and h > 8:
+            roi = image[y:y+h, x:x+w]
+
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            avg_sat = np.mean(hsv[:, :, 1])
+
+            # Confirm it's mostly gray background
+            if avg_sat < 60:
+                tracks.append((x, y, w, h))
 
     tracks = sorted(tracks, key=lambda t: t[1])
     return tracks
@@ -95,7 +104,7 @@ DISEASE_KEYS = [
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v42"
+    return "HSV Preprocess Service Running v43"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -123,7 +132,8 @@ def detect_disease_bars():
         page_count += 1
 
         image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
-        tracks = find_tracks(image)
+
+        tracks = find_horizontal_tracks(image)
 
         for i, track in enumerate(tracks):
             if i >= len(DISEASE_KEYS):
