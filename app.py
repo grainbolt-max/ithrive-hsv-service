@@ -1,5 +1,3 @@
-import os
-import io
 import numpy as np
 import cv2
 from flask import Flask, request, jsonify
@@ -8,20 +6,18 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
-ENGINE_NAME = "hsv_v40_calibrated_yellow_span_locked"
+ENGINE_NAME = "hsv_v41_auto_track_detection"
 
-# ---------- HSV Calibration ----------
+# ---------- Yellow Calibration ----------
 YELLOW_HUE_MIN = 18
 YELLOW_HUE_MAX = 38
-SAT_MIN = 50          # lowered from 70
-VAL_MIN = 110         # lowered from 120
+SAT_MIN = 45
+VAL_MIN = 105
 
-GRAY_RGB_DELTA = 12
+GRAY_DELTA = 15
 
-ROW_HEIGHT = 48
-TRACK_HEIGHT = 22
-LEFT_MARGIN = 520
-RIGHT_MARGIN = 1150
+LEFT_BOUND = 450
+RIGHT_BOUND = 1200
 
 DISEASE_ROWS = [
     "adhd_children_learning",
@@ -52,12 +48,34 @@ DISEASE_ROWS = [
 
 # --------------------------------------------------------
 
-def is_gray_pixel(r, g, b):
+def is_gray(b, g, r):
     return (
-        abs(int(r) - int(g)) < GRAY_RGB_DELTA and
-        abs(int(r) - int(b)) < GRAY_RGB_DELTA and
-        abs(int(g) - int(b)) < GRAY_RGB_DELTA
+        abs(int(r) - int(g)) < GRAY_DELTA and
+        abs(int(r) - int(b)) < GRAY_DELTA and
+        abs(int(g) - int(b)) < GRAY_DELTA
     )
+
+def detect_tracks(image):
+    h, w, _ = image.shape
+    gray_mask = np.zeros((h, w), dtype=np.uint8)
+
+    for y in range(h):
+        for x in range(LEFT_BOUND, min(RIGHT_BOUND, w)):
+            b, g, r = image[y, x]
+            if is_gray(b, g, r):
+                gray_mask[y, x] = 255
+
+    contours, _ = cv2.findContours(gray_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    tracks = []
+    for cnt in contours:
+        x, y, cw, ch = cv2.boundingRect(cnt)
+
+        if cw > 500 and 15 < ch < 40:
+            tracks.append((x, y, cw, ch))
+
+    tracks = sorted(tracks, key=lambda t: t[1])
+    return tracks
 
 def isolate_yellow_span(track_img):
     hsv = cv2.cvtColor(track_img, cv2.COLOR_BGR2HSV)
@@ -70,23 +88,18 @@ def isolate_yellow_span(track_img):
         (v >= VAL_MIN)
     )
 
-    b, g, r = cv2.split(track_img)
-    gray_mask = np.vectorize(is_gray_pixel)(r, g, b)
+    cols = yellow_mask.any(axis=0)
 
-    final_mask = yellow_mask & (~gray_mask)
-
-    cols = final_mask.any(axis=0)
     if not np.any(cols):
         return 0
 
     span_pixels = np.sum(cols)
-    total_pixels = final_mask.shape[1]
+    total_pixels = yellow_mask.shape[1]
 
     return int((span_pixels / total_pixels) * 100)
 
-
 def classify(percent):
-    if percent >= 80:
+    if percent >= 75:
         return "severe"
     if percent >= 50:
         return "moderate"
@@ -96,11 +109,9 @@ def classify(percent):
         return "normal"
     return "none"
 
-
 @app.route("/")
 def health():
-    return "HSV Preprocess Service Running v40"
-
+    return "HSV Preprocess Service Running v41"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -118,36 +129,37 @@ def detect():
         return jsonify({"error": "PDF conversion failed"}), 500
 
     results = {}
+    disease_index = 0
 
     for page in pages:
         img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        base_y = 520
+        tracks = detect_tracks(img)
 
-        for i, disease in enumerate(DISEASE_ROWS):
-            if disease in results:
-                continue
+        for track in tracks:
+            if disease_index >= len(DISEASE_ROWS):
+                break
 
-            y_center = base_y + (i * ROW_HEIGHT)
-            y1 = int(y_center - TRACK_HEIGHT // 2)
-            y2 = int(y_center + TRACK_HEIGHT // 2)
+            x, y, w, h = track
+            track_img = img[y:y+h, x:x+w]
 
-            track = img[y1:y2, LEFT_MARGIN:RIGHT_MARGIN]
+            percent = isolate_yellow_span(track_img)
 
-            percent = isolate_yellow_span(track)
+            disease_name = DISEASE_ROWS[disease_index]
 
-            results[disease] = {
+            results[disease_name] = {
                 "progression_percent": percent,
                 "risk_label": classify(percent),
                 "source": ENGINE_NAME,
             }
+
+            disease_index += 1
 
     return jsonify({
         "engine": ENGINE_NAME,
         "pages_found": len(pages),
         "results": results
     })
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
