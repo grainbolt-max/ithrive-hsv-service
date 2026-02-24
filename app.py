@@ -59,9 +59,8 @@ PAGE_2_DISEASES = [
     "cerebral_serotonin_decreased"
 ]
 
-
 # ==================================================
-# DETECTION (UNCHANGED)
+# DETECTION
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -120,7 +119,7 @@ def detect_all_bars_on_page(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
-                    detected.append((page_index, y_top, y_bottom, x_start, x_end))
+                    detected.append((y_top, y_bottom, x_start, x_end))
                     y = y_bottom + 10
                     continue
 
@@ -151,6 +150,9 @@ def classify_color_from_band(img, y_top, y_bottom, x_start, x_end):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     sample = hsv[y1:y2, x1:x2]
 
+    if sample.size == 0:
+        return "none"
+
     sat = sample[:, :, 1]
     hue = sample[:, :, 0]
 
@@ -159,7 +161,10 @@ def classify_color_from_band(img, y_top, y_bottom, x_start, x_end):
     colored_pixels = np.sum(mask)
     total_pixels = mask.size
 
-    ratio = colored_pixels / total_pixels if total_pixels > 0 else 0
+    if total_pixels == 0:
+        return "none"
+
+    ratio = colored_pixels / total_pixels
 
     if ratio < MIN_COLOR_RATIO:
         return "none"
@@ -188,8 +193,8 @@ def detect_all_24_diseases(pages):
 
     for page_index in [0, 1]:
         img = np.array(pages[page_index])
-        bars = detect_all_bars_on_page(img)
-        for (page_index, y_top, y_bottom, x_start, x_end) in bars:
+        bands = detect_all_bars_on_page(img)
+        for (y_top, y_bottom, x_start, x_end) in bands:
             global_bands.append((page_index, y_top, y_bottom, x_start, x_end))
 
     if len(global_bands) != 24:
