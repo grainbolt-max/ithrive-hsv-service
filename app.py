@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v65_two_page_scoped_global_index_height10"
+ENGINE_NAME = "v66_two_page_scoped_global_index_height12"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -19,7 +19,7 @@ MAX_HEIGHT_DRIFT_RATIO = 0.03
 VALUE_NONWHITE_THRESHOLD = 245
 
 BAR_MIN_WIDTH = 600
-BAR_MIN_HEIGHT = 10   # lowered from 14 → 10
+BAR_MIN_HEIGHT = 12   # calibrated final threshold
 VERTICAL_SCAN_STEP = 2
 
 # Only scan page 1 and 2 (zero-based indices 0 and 1)
