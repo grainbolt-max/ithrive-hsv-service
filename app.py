@@ -6,19 +6,19 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v44_deterministic_slice_locked"
+ENGINE_NAME = "hsv_v44_deterministic_slice_locked_v2"
 API_KEY = "ithrive_secure_2026_key"
 
 PAGE_HEIGHT = 2200
 PAGE_WIDTH = 1700
 
-# Locked disease region
-Y_START = 650
-Y_END = 1850
+# 🔒 Locked disease region (shifted down)
+Y_START = 750
+Y_END = 1950
 ROW_COUNT = 24
 ROW_HEIGHT = int((Y_END - Y_START) / ROW_COUNT)
 
-# Locked bar horizontal region
+# 🔒 Locked bar horizontal region
 BAR_X_START = 700
 BAR_X_END = 1600
 
@@ -39,7 +39,7 @@ def risk_label(percent):
 def measure_yellow_span(roi):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    # Pure yellow detection tuned tight
+    # Tight yellow detection
     lower_yellow = np.array([20, 120, 120])
     upper_yellow = np.array([38, 255, 255])
 
@@ -131,7 +131,7 @@ def detect_disease_bars():
                 "source": ENGINE_NAME
             }
 
-        break  # only first disease page processed
+        break  # process only first disease page
 
     return jsonify({
         "engine": ENGINE_NAME,
