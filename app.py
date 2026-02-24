@@ -5,16 +5,19 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v83_geometry_diagnostic_engine"
+ENGINE_NAME = "v84_contiguous_stripe_engine"
 API_KEY = "ithrive_secure_2026_key"
 
-TARGET_PAGE_INDEX = 1  # Page 2 visually (0-based index)
-
-TOP_CROP_RATIO = 0.32      # remove Homeostasis section
-BOTTOM_CROP_RATIO = 0.06   # remove legend color bar
+TARGET_PAGE_INDEX = 1  # Page 2 visually (0-based)
+TOP_CROP_RATIO = 0.32
+BOTTOM_CROP_RATIO = 0.06
 ROW_COUNT = 24
-LEFT_SCAN_RATIO = 0.65     # only scan left portion for stripe
-SAT_THRESHOLD = 40         # minimum saturation to count as colored
+LEFT_SCAN_RATIO = 0.65
+
+SAT_THRESHOLD = 60        # stricter than v83
+VAL_THRESHOLD = 50
+COLUMN_DENSITY_THRESHOLD = 0.15  # % of colored pixels per column
+MAX_GAP_COLUMNS = 3       # tolerate tiny breaks
 
 
 @app.route("/")
@@ -33,7 +36,6 @@ def detect_disease_bars():
         return jsonify({"error": "No file uploaded"}), 400
 
     pdf_bytes = request.files["file"].read()
-
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if TARGET_PAGE_INDEX >= len(pages):
@@ -44,10 +46,9 @@ def detect_disease_bars():
 
     h, w, _ = page_img.shape
 
-    # ---- Vertical crop ----
+    # --- Vertical crop ---
     top_crop = int(h * TOP_CROP_RATIO)
     bottom_crop = int(h * (1 - BOTTOM_CROP_RATIO))
-
     disease_region = page_img[top_crop:bottom_crop, :]
 
     region_h, region_w, _ = disease_region.shape
@@ -59,7 +60,6 @@ def detect_disease_bars():
 
         y1 = i * row_height
         y2 = (i + 1) * row_height if i < ROW_COUNT - 1 else region_h
-
         row_img = disease_region[y1:y2, :]
 
         scan_width = int(region_w * LEFT_SCAN_RATIO)
@@ -67,31 +67,45 @@ def detect_disease_bars():
 
         hsv = cv2.cvtColor(scan_region, cv2.COLOR_BGR2HSV)
 
-        saturation = hsv[:, :, 1]
-        value = hsv[:, :, 2]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
 
-        # Mask colored pixels (exclude low saturation / white)
-        colored_mask = (saturation > SAT_THRESHOLD) & (value > 40)
+        colored_mask = (sat > SAT_THRESHOLD) & (val > VAL_THRESHOLD)
 
-        colored_pixels = np.sum(colored_mask)
-        total_pixels = colored_mask.size
+        # --- Column-based contiguous stripe detection ---
+        stripe_end_col = 0
+        gap_counter = 0
+        stripe_active = False
 
-        stripe_density = float(colored_pixels) / float(total_pixels)
+        for col in range(scan_width):
 
-        # Width ratio (how far stripe extends horizontally)
-        col_sums = np.sum(colored_mask, axis=0)
-        nonzero_cols = np.where(col_sums > 0)[0]
+            col_mask = colored_mask[:, col]
+            col_density = np.sum(col_mask) / len(col_mask)
 
-        if len(nonzero_cols) > 0:
-            stripe_width_ratio = float(nonzero_cols.max()) / float(scan_width)
-        else:
-            stripe_width_ratio = 0.0
+            if col_density > COLUMN_DENSITY_THRESHOLD:
+                stripe_active = True
+                stripe_end_col = col
+                gap_counter = 0
+            else:
+                if stripe_active:
+                    gap_counter += 1
+                    if gap_counter > MAX_GAP_COLUMNS:
+                        break
 
-        # Average HSV of colored pixels
-        if colored_pixels > 0:
-            avg_h = float(np.mean(hsv[:, :, 0][colored_mask]))
-            avg_s = float(np.mean(hsv[:, :, 1][colored_mask]))
-            avg_v = float(np.mean(hsv[:, :, 2][colored_mask]))
+        stripe_width_ratio = stripe_end_col / scan_width if stripe_active else 0.0
+
+        # --- Stripe-only HSV average ---
+        if stripe_active and stripe_end_col > 0:
+            stripe_pixels = colored_mask[:, :stripe_end_col]
+            stripe_hsv = hsv[:, :stripe_end_col]
+
+            valid_pixels = stripe_pixels > 0
+            if np.sum(valid_pixels) > 0:
+                avg_h = float(np.mean(stripe_hsv[:, :, 0][valid_pixels]))
+                avg_s = float(np.mean(stripe_hsv[:, :, 1][valid_pixels]))
+                avg_v = float(np.mean(stripe_hsv[:, :, 2][valid_pixels]))
+            else:
+                avg_h, avg_s, avg_v = 0.0, 0.0, 0.0
         else:
             avg_h, avg_s, avg_v = 0.0, 0.0, 0.0
 
@@ -99,7 +113,6 @@ def detect_disease_bars():
             "row_index": i + 1,
             "y_top_absolute": int(top_crop + y1),
             "y_bottom_absolute": int(top_crop + y2),
-            "stripe_pixel_density": round(stripe_density, 4),
             "stripe_width_ratio": round(stripe_width_ratio, 4),
             "avg_hsv": [
                 round(avg_h, 2),
