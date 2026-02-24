@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL STABLE ENGINE WITH DENSITY GUARD)
+# DECLARE
 # ==================================================
 
-ENGINE_NAME = "v78_full_24_color_detection_density_guarded"
+ENGINE_NAME = "v79_full_24_color_detection_padded"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -21,15 +21,13 @@ BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-# Hue thresholds (calibrated)
+# Hue thresholds
 RED_MAX = 8
 ORANGE_MAX = 20
 YELLOW_MAX = 40
 
 SATURATION_THRESHOLD = 20
-
-# NEW: minimum percentage of colored pixels required
-MIN_COLOR_RATIO = 0.08  # 8% of sample must be colored
+MIN_COLOR_RATIO = 0.05  # 5% colored pixels required
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -63,7 +61,7 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# DETECTION (UNCHANGED V67 LOGIC)
+# DETECTION (UNCHANGED)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -122,38 +120,35 @@ def detect_all_bars_on_page(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
-                    detected.append((y_top + y_bottom) // 2)
+                    detected.append((page_index, y_top, y_bottom, x_start, x_end))
                     y = y_bottom + 10
                     continue
 
         y += VERTICAL_SCAN_STEP
 
-    return sorted(detected)
+    return detected
 
 
 # ==================================================
-# COLOR CLASSIFICATION WITH DENSITY GUARD
+# COLOR CLASSIFICATION (PADDED FULL-BAND)
 # ==================================================
 
-def classify_color_from_bar(img, y_center):
+def classify_color_from_band(img, y_top, y_bottom, x_start, x_end):
+
+    band_width = x_end - x_start
+    band_height = y_bottom - y_top
+
+    # Proportional padding to skip borders and trailing grey
+    left_padding = int(band_width * 0.08)
+    right_limit = int(band_width * 0.85)
+
+    x1 = x_start + left_padding
+    x2 = x_start + right_limit
+
+    y1 = y_top + int(band_height * 0.2)
+    y2 = y_bottom - int(band_height * 0.2)
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    value = hsv[:, :, 2]
-
-    row = value[y_center, :]
-    col_mask = row < VALUE_NONWHITE_THRESHOLD
-    nonzero = np.where(col_mask)[0]
-
-    if len(nonzero) == 0:
-        return "none"
-
-    x_start = nonzero[0]
-
-    y1 = max(0, y_center - 3)
-    y2 = min(img.shape[0], y_center + 3)
-    x1 = x_start + 5
-    x2 = min(img.shape[1], x_start + 30)
-
     sample = hsv[y1:y2, x1:x2]
 
     sat = sample[:, :, 1]
@@ -164,9 +159,8 @@ def classify_color_from_bar(img, y_center):
     colored_pixels = np.sum(mask)
     total_pixels = mask.size
 
-    ratio = colored_pixels / total_pixels
+    ratio = colored_pixels / total_pixels if total_pixels > 0 else 0
 
-    # Density guard
     if ratio < MIN_COLOR_RATIO:
         return "none"
 
@@ -185,49 +179,44 @@ def classify_color_from_bar(img, y_center):
 
 
 # ==================================================
-# MAIN MAPPING
+# MAIN
 # ==================================================
 
 def detect_all_24_diseases(pages):
 
-    global_bars = []
+    global_bands = []
 
     for page_index in [0, 1]:
         img = np.array(pages[page_index])
         bars = detect_all_bars_on_page(img)
-        for y_center in bars:
-            global_bars.append((page_index, y_center))
+        for (page_index, y_top, y_bottom, x_start, x_end) in bars:
+            global_bands.append((page_index, y_top, y_bottom, x_start, x_end))
 
-    if len(global_bars) != 24:
-        raise RuntimeError(f"Expected 24 total bars, detected {len(global_bars)}")
+    if len(global_bands) != 24:
+        raise RuntimeError(f"Expected 24 total bars, detected {len(global_bands)}")
 
     results = {}
 
-    page1_bars = global_bars[:12]
-    page2_bars = global_bars[12:]
-    page2_bars_reversed = list(reversed(page2_bars))
+    page1 = global_bands[:12]
+    page2 = list(reversed(global_bands[12:]))
 
-    for disease, (page_index, y_center) in zip(PAGE_1_DISEASES, page1_bars):
+    for disease, band in zip(PAGE_1_DISEASES, page1):
+        page_index, y_top, y_bottom, x_start, x_end = band
         img = np.array(pages[page_index])
-        risk = classify_color_from_bar(img, y_center)
-        results[disease] = {
-            "risk_label": risk,
-            "source": ENGINE_NAME
-        }
+        risk = classify_color_from_band(img, y_top, y_bottom, x_start, x_end)
+        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
 
-    for disease, (page_index, y_center) in zip(PAGE_2_DISEASES, page2_bars_reversed):
+    for disease, band in zip(PAGE_2_DISEASES, page2):
+        page_index, y_top, y_bottom, x_start, x_end = band
         img = np.array(pages[page_index])
-        risk = classify_color_from_bar(img, y_center)
-        results[disease] = {
-            "risk_label": risk,
-            "source": ENGINE_NAME
-        }
+        risk = classify_color_from_band(img, y_top, y_bottom, x_start, x_end)
+        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
 
     return results
 
 
 # ==================================================
-# OUTPUT
+# ROUTES
 # ==================================================
 
 @app.route("/")
