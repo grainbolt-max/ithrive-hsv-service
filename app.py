@@ -6,21 +6,22 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v44_deterministic_slice_locked_v3"
+ENGINE_NAME = "hsv_v45_locked_measured_geometry"
 API_KEY = "ithrive_secure_2026_key"
 
-PAGE_HEIGHT = 2200
+# Page dimensions confirmed from probe
 PAGE_WIDTH = 1700
+PAGE_HEIGHT = 2200
 
-# 🔒 Locked disease region (fine-tuned)
+# ===== LOCKED DISEASE TABLE REGION =====
 Y_START = 720
 Y_END = 1920
 ROW_COUNT = 24
 ROW_HEIGHT = int((Y_END - Y_START) / ROW_COUNT)
 
-# 🔒 Locked bar horizontal region
-BAR_X_START = 700
-BAR_X_END = 1600
+# ===== LOCKED BAR TRACK REGION (MEASURED FROM ACTUAL PAGE) =====
+BAR_X_START = 870
+BAR_X_END = 1610
 
 
 def risk_label(percent):
@@ -39,8 +40,8 @@ def risk_label(percent):
 def measure_yellow_span(roi):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    # Tight yellow detection
-    lower_yellow = np.array([20, 120, 120])
+    # Strict yellow detection (excludes gray + green)
+    lower_yellow = np.array([20, 110, 120])
     upper_yellow = np.array([38, 255, 255])
 
     mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -86,7 +87,7 @@ DISEASE_KEYS = [
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v44"
+    return "HSV Preprocess Service Running v45"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -109,8 +110,8 @@ def detect_disease_bars():
 
     results = {}
 
-    # Only process first disease page
-    page = pages[0]
+    # Disease bars are on page 2 of report (index 1)
+    page = pages[1]
     image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
     for i in range(ROW_COUNT):
