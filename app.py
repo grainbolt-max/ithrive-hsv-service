@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (STABLE V67 DETECTION + COLOR CLASSIFIER)
+# DECLARE (V67 DETECTION + SATURATION-MASKED COLOR)
 # ==================================================
 
-ENGINE_NAME = "v73_full_24_color_detection"
+ENGINE_NAME = "v74_full_24_color_detection_masked"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -21,7 +21,6 @@ BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-# Page 1 order (top → bottom)
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
@@ -37,7 +36,6 @@ PAGE_1_DISEASES = [
     "tissue_inflammatory_process"
 ]
 
-# Page 2 order (bottom → top)
 PAGE_2_DISEASES = [
     "hypothyroidism",
     "hyperthyroidism",
@@ -55,7 +53,7 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# DETECTION (EXACT v67 LOGIC — UNCHANGED)
+# DETECTION (UNCHANGED V67 LOGIC)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -124,7 +122,7 @@ def detect_all_bars_on_page(img):
 
 
 # ==================================================
-# COLOR CLASSIFICATION
+# COLOR CLASSIFICATION (SATURATION MASKED)
 # ==================================================
 
 def classify_color_from_bar(img, y_center):
@@ -132,7 +130,6 @@ def classify_color_from_bar(img, y_center):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
-    # find left edge of fill
     row = value[y_center, :]
     col_mask = row < VALUE_NONWHITE_THRESHOLD
     nonzero = np.where(col_mask)[0]
@@ -142,7 +139,6 @@ def classify_color_from_bar(img, y_center):
 
     x_start = nonzero[0]
 
-    # sample small patch at far left of bar
     y1 = max(0, y_center - 3)
     y2 = min(img.shape[0], y_center + 3)
     x1 = x_start + 5
@@ -150,12 +146,16 @@ def classify_color_from_bar(img, y_center):
 
     sample = hsv[y1:y2, x1:x2]
 
-    avg_h = np.mean(sample[:, :, 0])
-    avg_s = np.mean(sample[:, :, 1])
+    # Mask out low-saturation pixels (white separators)
+    sat = sample[:, :, 1]
+    hue = sample[:, :, 0]
 
-    # Grey (none/Low)
-    if avg_s < 25:
+    mask = sat > 40  # Only keep real colored pixels
+
+    if np.sum(mask) == 0:
         return "none"
+
+    avg_h = np.mean(hue[mask])
 
     # Red (Severe)
     if avg_h <= 10 or avg_h >= 170:
@@ -180,7 +180,6 @@ def detect_all_24_diseases(pages):
 
     global_bars = []
 
-    # detect bars globally across pages 1 & 2
     for page_index in [0, 1]:
         img = np.array(pages[page_index])
         bars = detect_all_bars_on_page(img)
@@ -192,29 +191,19 @@ def detect_all_24_diseases(pages):
 
     results = {}
 
-    # split into two halves
     page1_bars = global_bars[:12]
     page2_bars = global_bars[12:]
+    page2_bars_reversed = list(reversed(page2_bars))
 
-    # PAGE 1 (normal order)
     for disease, (page_index, y_center) in zip(PAGE_1_DISEASES, page1_bars):
         img = np.array(pages[page_index])
         risk = classify_color_from_bar(img, y_center)
-        results[disease] = {
-            "risk_label": risk,
-            "source": ENGINE_NAME
-        }
-
-    # PAGE 2 (reverse)
-    page2_bars_reversed = list(reversed(page2_bars))
+        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
 
     for disease, (page_index, y_center) in zip(PAGE_2_DISEASES, page2_bars_reversed):
         img = np.array(pages[page_index])
         risk = classify_color_from_bar(img, y_center)
-        results[disease] = {
-            "risk_label": risk,
-            "source": ENGINE_NAME
-        }
+        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
 
     return results
 
