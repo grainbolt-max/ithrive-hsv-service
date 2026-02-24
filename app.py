@@ -1,7 +1,8 @@
 # ===================================================
-# v36 TRACK-ISOLATED STRICT HUE + SATURATION (CALIBRATED)
+# v37 STRICT HUE + SATURATION SPAN (FIXED GEOMETRY)
 # Page-aware geometry
 # PyMuPDF @ 300 DPI
+# Deterministic. No track detection.
 # ===================================================
 
 import fitz
@@ -11,7 +12,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v36_track_isolated_span_calibrated"
+ENGINE_NAME = "hsv_v37_fixed_span_strict_locked"
 AUTH_KEY = "ithrive_secure_2026_key"
 
 # ----------------------------
@@ -73,7 +74,7 @@ def risk_label_from_percent(p):
         return "none"
 
 # ----------------------------
-# DISEASE COLOR MASK
+# COLOR MASK
 # ----------------------------
 
 def disease_color_mask(hsv):
@@ -102,30 +103,16 @@ def analyze_bar(image, base_y, row_index):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     mask = disease_color_mask(hsv)
 
-    # Column density requirement
     col_density = np.sum(mask, axis=0) / mask.shape[0]
     valid_cols = np.where(col_density > MIN_COLUMN_DENSITY)[0]
 
     if len(valid_cols) == 0:
         return 0
 
-    # Detect dark gray track region
-    v = hsv[:, :, 2]
-    gray_mask = (hsv[:, :, 1] < 25) & (v < 160)
-    gray_density = np.sum(gray_mask, axis=0) / gray_mask.shape[0]
-    track_end_candidates = np.where(gray_density > 0.6)[0]
-
-    if len(track_end_candidates) == 0:
-        track_width = roi.shape[1]
-    else:
-        track_width = track_end_candidates[0]
-
-    if track_width <= 5:
-        return 0
-
     fill_end = valid_cols[-1]
+    total_width = roi.shape[1]
 
-    percent = int((fill_end / track_width) * 100)
+    percent = int((fill_end / total_width) * 100)
     percent = max(0, min(percent, 100))
 
     return percent
@@ -136,7 +123,7 @@ def analyze_bar(image, base_y, row_index):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v36"
+    return "HSV Preprocess Service Running v37"
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
