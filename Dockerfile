@@ -2,7 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies (REQUIRED for pdf2image)
+# Install system dependency required by pdf2image
 RUN apt-get update && \
     apt-get install -y poppler-utils && \
     apt-get clean
