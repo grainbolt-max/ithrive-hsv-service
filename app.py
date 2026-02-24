@@ -6,20 +6,20 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v46_locked_geometry_noise_floor"
+ENGINE_NAME = "hsv_v47_locked_geometry_vertical_shift"
 API_KEY = "ithrive_secure_2026_key"
 
 # Confirmed page dimensions
 PAGE_WIDTH = 1700
 PAGE_HEIGHT = 2200
 
-# Locked vertical region for disease table
-Y_START = 720
-Y_END = 1920
+# ===== LOCKED DISEASE TABLE REGION =====
+Y_START = 760   # shifted down for correct row alignment
+Y_END = 1960
 ROW_COUNT = 24
 ROW_HEIGHT = int((Y_END - Y_START) / ROW_COUNT)
 
-# Locked horizontal region for bar track (measured)
+# ===== LOCKED BAR TRACK REGION =====
 BAR_X_START = 870
 BAR_X_END = 1610
 
@@ -54,7 +54,7 @@ def measure_yellow_span(roi):
     span = xs.max() - xs.min()
     percent = int((span / roi.shape[1]) * 100)
 
-    # Hard noise floor — ignore tiny artifacts
+    # Hard noise floor
     if percent < 15:
         return 0
 
@@ -91,7 +91,7 @@ DISEASE_KEYS = [
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v46"
+    return "HSV Preprocess Service Running v47"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
