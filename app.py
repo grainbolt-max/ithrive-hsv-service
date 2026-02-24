@@ -8,15 +8,14 @@ from pdf2image import convert_from_bytes
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
-ENGINE_NAME = "hsv_v39_gray_safe_yellow_track_locked"
+ENGINE_NAME = "hsv_v40_calibrated_yellow_span_locked"
 
 # ---------- HSV Calibration ----------
 YELLOW_HUE_MIN = 18
 YELLOW_HUE_MAX = 38
-SAT_MIN = 70
-VAL_MIN = 120
+SAT_MIN = 50          # lowered from 70
+VAL_MIN = 110         # lowered from 120
 
-# Gray rejection threshold
 GRAY_RGB_DELTA = 12
 
 ROW_HEIGHT = 48
@@ -71,7 +70,6 @@ def isolate_yellow_span(track_img):
         (v >= VAL_MIN)
     )
 
-    # Explicit gray rejection
     b, g, r = cv2.split(track_img)
     gray_mask = np.vectorize(is_gray_pixel)(r, g, b)
 
@@ -101,7 +99,7 @@ def classify(percent):
 
 @app.route("/")
 def health():
-    return f"HSV Preprocess Service Running v39"
+    return "HSV Preprocess Service Running v40"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -124,7 +122,7 @@ def detect():
     for page in pages:
         img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        base_y = 520  # tuned for disease section
+        base_y = 520
 
         for i, disease in enumerate(DISEASE_ROWS):
             if disease in results:
