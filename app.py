@@ -6,24 +6,24 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v54_hard_locked_geometry"
+ENGINE_NAME = "v55_hard_locked_geometry_corrected"
 API_KEY = "ithrive_secure_2026_key"
 
 # =========================
-# LOCKED PAGE DIMENSIONS
+# FIXED PAGE DIMENSIONS
 # =========================
 PAGE_WIDTH = 1700
 PAGE_HEIGHT = 2200
 
 # =========================
-# LOCKED TRACK GEOMETRY
+# FIXED TRACK GEOMETRY
 # =========================
 ROW_COUNT = 12
 ROW_HEIGHT = 32
 
-# Measured from rendered 1700x2200 image
-PAGE1_FIRST_ROW_Y = 1086
-PAGE2_FIRST_ROW_Y = 1086
+# Corrected anchor (shifted up 96px from v54)
+PAGE1_FIRST_ROW_Y = 990
+PAGE2_FIRST_ROW_Y = 990
 
 TRACK_X1 = int(PAGE_WIDTH * 0.50)
 TRACK_X2 = int(PAGE_WIDTH * 0.95)
@@ -102,7 +102,7 @@ def measure_yellow_span(roi):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v54"
+    return "HSV Preprocess Service Running v55"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
