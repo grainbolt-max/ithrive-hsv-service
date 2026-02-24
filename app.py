@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
+import fitz  # PyMuPDF
 import numpy as np
-from pdf2image import convert_from_bytes
-import cv2
 
 app = Flask(__name__)
 
@@ -9,25 +8,8 @@ app = Flask(__name__)
 # DECLARE
 # ==================================================
 
-ENGINE_NAME = "v79_full_24_color_detection_padded"
+ENGINE_NAME = "v80_full_vector_stroke_engine"
 API_KEY = "ithrive_secure_2026_key"
-
-DPI_LOCK = 200
-EXPECTED_PROBE_HEIGHT = 2200
-MAX_HEIGHT_DRIFT_RATIO = 0.03
-
-VALUE_NONWHITE_THRESHOLD = 245
-BAR_MIN_WIDTH = 700
-BAR_MIN_HEIGHT = 12
-VERTICAL_SCAN_STEP = 2
-
-# Hue thresholds
-RED_MAX = 8
-ORANGE_MAX = 20
-YELLOW_MAX = 40
-
-SATURATION_THRESHOLD = 20
-MIN_COLOR_RATIO = 0.05  # 5% colored pixels required
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -60,162 +42,133 @@ PAGE_2_DISEASES = [
 ]
 
 # ==================================================
-# DETECTION
+# COLOR CLASSIFICATION (RGB)
 # ==================================================
 
-def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
-    y_top = start_y
-    y_bottom = start_y
-
-    while y_top > 0:
-        row = value_channel[y_top, x_start:x_end]
-        if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
-            y_top -= 1
-        else:
-            break
-
-    while y_bottom < height - 1:
-        row = value_channel[y_bottom, x_start:x_end]
-        if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
-            y_bottom += 1
-        else:
-            break
-
-    return y_top, y_bottom
-
-
-def detect_all_bars_on_page(img):
-
-    runtime_height, _, _ = img.shape
-
-    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
-    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
-        raise RuntimeError(
-            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
-        )
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    value = hsv[:, :, 2]
-
-    detected = []
-    y = 10
-
-    while y < runtime_height - 10:
-
-        row = value[y, :]
-        col_mask = row < VALUE_NONWHITE_THRESHOLD
-        nonzero = np.where(col_mask)[0]
-
-        if len(nonzero) > 0:
-            x_start = nonzero[0]
-            x_end = nonzero[-1]
-
-            if (x_end - x_start) > BAR_MIN_WIDTH:
-
-                y_top, y_bottom = measure_vertical_band(
-                    value, y, x_start, x_end, runtime_height
-                )
-
-                band_height = y_bottom - y_top
-
-                if band_height >= BAR_MIN_HEIGHT:
-                    detected.append((y_top, y_bottom, x_start, x_end))
-                    y = y_bottom + 10
-                    continue
-
-        y += VERTICAL_SCAN_STEP
-
-    return detected
-
-
-# ==================================================
-# COLOR CLASSIFICATION (PADDED FULL-BAND)
-# ==================================================
-
-def classify_color_from_band(img, y_top, y_bottom, x_start, x_end):
-
-    band_width = x_end - x_start
-    band_height = y_bottom - y_top
-
-    # Proportional padding to skip borders and trailing grey
-    left_padding = int(band_width * 0.08)
-    right_limit = int(band_width * 0.85)
-
-    x1 = x_start + left_padding
-    x2 = x_start + right_limit
-
-    y1 = y_top + int(band_height * 0.2)
-    y2 = y_bottom - int(band_height * 0.2)
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    sample = hsv[y1:y2, x1:x2]
-
-    if sample.size == 0:
+def classify_rgb(rgb):
+    if rgb is None:
         return "none"
 
-    sat = sample[:, :, 1]
-    hue = sample[:, :, 0]
+    r, g, b = rgb
 
-    mask = sat > SATURATION_THRESHOLD
-
-    colored_pixels = np.sum(mask)
-    total_pixels = mask.size
-
-    if total_pixels == 0:
+    # Grey detection (channels nearly equal)
+    if abs(r - g) < 0.05 and abs(g - b) < 0.05:
         return "none"
 
-    ratio = colored_pixels / total_pixels
-
-    if ratio < MIN_COLOR_RATIO:
-        return "none"
-
-    dominant_hue = float(np.mean(hue[mask]))
-
-    if dominant_hue <= RED_MAX or dominant_hue >= 170:
+    # Severe (Red dominant)
+    if r > 0.7 and g < 0.4:
         return "severe"
 
-    if RED_MAX < dominant_hue <= ORANGE_MAX:
+    # Moderate (Orange)
+    if r > 0.7 and 0.4 <= g <= 0.7:
         return "moderate"
 
-    if ORANGE_MAX < dominant_hue <= YELLOW_MAX:
+    # Mild (Yellow)
+    if r > 0.7 and g > 0.7:
         return "mild"
 
     return "none"
 
 
 # ==================================================
-# MAIN
+# VECTOR EXTRACTION
 # ==================================================
 
-def detect_all_24_diseases(pages):
+def extract_bar_stroke_colors(page):
 
-    global_bands = []
+    drawings = page.get_drawings()
 
-    for page_index in [0, 1]:
-        img = np.array(pages[page_index])
-        bands = detect_all_bars_on_page(img)
-        for (y_top, y_bottom, x_start, x_end) in bands:
-            global_bands.append((page_index, y_top, y_bottom, x_start, x_end))
+    vertical_lines = []
 
-    if len(global_bands) != 24:
-        raise RuntimeError(f"Expected 24 total bars, detected {len(global_bands)}")
+    for d in drawings:
+        if d["type"] != "stroke":
+            continue
+
+        color = d.get("color")
+        items = d.get("items", [])
+
+        for item in items:
+            if item[0] == "l":  # line
+                x1, y1, x2, y2 = item[1]
+
+                # vertical line detection
+                if abs(x1 - x2) < 1 and abs(y2 - y1) > 10:
+                    vertical_lines.append({
+                        "y_mid": (y1 + y2) / 2,
+                        "color": color
+                    })
+
+    if not vertical_lines:
+        return []
+
+    # Group by Y proximity into bars
+    vertical_lines.sort(key=lambda x: x["y_mid"])
+
+    bars = []
+    current_group = [vertical_lines[0]]
+
+    for line in vertical_lines[1:]:
+        if abs(line["y_mid"] - current_group[-1]["y_mid"]) < 15:
+            current_group.append(line)
+        else:
+            bars.append(current_group)
+            current_group = [line]
+
+    bars.append(current_group)
+
+    # For each bar, determine dominant color
+    bar_colors = []
+
+    for group in bars:
+        colors = [tuple(line["color"]) for line in group if line["color"]]
+
+        if not colors:
+            bar_colors.append(None)
+            continue
+
+        # Most frequent color in this group
+        unique, counts = np.unique(colors, axis=0, return_counts=True)
+        dominant = unique[np.argmax(counts)]
+
+        bar_colors.append(tuple(dominant))
+
+    return bar_colors
+
+
+# ==================================================
+# MAIN EXTRACTION
+# ==================================================
+
+def detect_all_24_diseases(pdf_bytes):
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    page1 = doc[0]
+    page2 = doc[1]
+
+    bars_page1 = extract_bar_stroke_colors(page1)
+    bars_page2 = extract_bar_stroke_colors(page2)
+
+    if len(bars_page1) < 12 or len(bars_page2) < 12:
+        raise RuntimeError("Did not detect 12 stroke groups per page")
 
     results = {}
 
-    page1 = global_bands[:12]
-    page2 = list(reversed(global_bands[12:]))
+    # Page 1 direct order
+    for disease, color in zip(PAGE_1_DISEASES, bars_page1[:12]):
+        results[disease] = {
+            "risk_label": classify_rgb(color),
+            "source": ENGINE_NAME
+        }
 
-    for disease, band in zip(PAGE_1_DISEASES, page1):
-        page_index, y_top, y_bottom, x_start, x_end = band
-        img = np.array(pages[page_index])
-        risk = classify_color_from_band(img, y_top, y_bottom, x_start, x_end)
-        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
+    # Page 2 reversed
+    reversed_page2 = list(reversed(bars_page2[:12]))
 
-    for disease, band in zip(PAGE_2_DISEASES, page2):
-        page_index, y_top, y_bottom, x_start, x_end = band
-        img = np.array(pages[page_index])
-        risk = classify_color_from_band(img, y_top, y_bottom, x_start, x_end)
-        results[disease] = {"risk_label": risk, "source": ENGINE_NAME}
+    for disease, color in zip(PAGE_2_DISEASES, reversed_page2):
+        results[disease] = {
+            "risk_label": classify_rgb(color),
+            "source": ENGINE_NAME
+        }
 
     return results
 
@@ -243,18 +196,10 @@ def detect_disease_bars():
     pdf_bytes = pdf_file.read()
 
     try:
-        pages = convert_from_bytes(
-            pdf_bytes,
-            dpi=DPI_LOCK,
-            fmt="png",
-            single_file=False
-        )
-
-        results = detect_all_24_diseases(pages)
+        results = detect_all_24_diseases(pdf_bytes)
 
         return jsonify({
             "engine": ENGINE_NAME,
-            "pages_found": len(pages),
             "results": results
         })
 
