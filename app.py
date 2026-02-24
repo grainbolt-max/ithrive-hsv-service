@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL THICKNESS-RANKED ENGINE)
+# DECLARE (RELAXED CAPTURE + THICKNESS RANKING)
 # ==================================================
 
-ENGINE_NAME = "v71_full_24_disease_mapping_thickness_ranked"
+ENGINE_NAME = "v72_full_24_disease_mapping_thickness_ranked_relaxed"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -17,8 +17,10 @@ EXPECTED_PROBE_HEIGHT = 2200
 MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
-BAR_MIN_WIDTH = 700
-BAR_MIN_HEIGHT = 8      # lower baseline — ranking handles filtering
+
+# Relaxed capture thresholds
+BAR_MIN_WIDTH = 400
+BAR_MIN_HEIGHT = 6
 VERTICAL_SCAN_STEP = 2
 
 PAGE_1_DISEASES = [
@@ -101,6 +103,7 @@ def detect_all_horizontal_bands(img):
         nonzero = np.where(col_mask)[0]
 
         if len(nonzero) > 0:
+
             x_start = nonzero[0]
             x_end = nonzero[-1]
 
@@ -113,17 +116,30 @@ def detect_all_horizontal_bands(img):
                 band_height = y_bottom - y_top
 
                 if band_height >= BAR_MIN_HEIGHT:
+
                     bands.append({
                         "center": (y_top + y_bottom) // 2,
                         "height": band_height
                     })
 
-                    y = y_bottom + 10
+                    y = y_bottom + 5
                     continue
 
         y += VERTICAL_SCAN_STEP
 
     return bands
+
+
+def select_top_12_by_thickness(bands):
+
+    if len(bands) < 12:
+        raise RuntimeError(f"Expected at least 12 bands, detected {len(bands)}")
+
+    bands_sorted = sorted(bands, key=lambda x: x["height"], reverse=True)
+    top_12 = bands_sorted[:12]
+    top_12_sorted_vertical = sorted(top_12, key=lambda x: x["center"])
+
+    return [b["center"] for b in top_12_sorted_vertical]
 
 
 def compute_bar_fill(img, y_center):
@@ -153,28 +169,11 @@ def compute_bar_fill(img, y_center):
     return int((filled_pixels / total_pixels) * 100)
 
 
-def select_top_12_by_thickness(bands):
-
-    if len(bands) < 12:
-        raise RuntimeError(f"Expected at least 12 bands, detected {len(bands)}")
-
-    # Sort by height descending
-    bands_sorted = sorted(bands, key=lambda x: x["height"], reverse=True)
-
-    # Take top 12 thickest
-    top_12 = bands_sorted[:12]
-
-    # Restore vertical order
-    top_12_sorted_vertical = sorted(top_12, key=lambda x: x["center"])
-
-    return [b["center"] for b in top_12_sorted_vertical]
-
-
 def detect_all_24_diseases(pages):
 
     results = {}
 
-    # ---------- PAGE 1 ----------
+    # PAGE 1
     page1_img = np.array(pages[0])
     page1_bands = detect_all_horizontal_bands(page1_img)
     page1_centers = select_top_12_by_thickness(page1_bands)
@@ -187,12 +186,11 @@ def detect_all_24_diseases(pages):
             "source": ENGINE_NAME
         }
 
-    # ---------- PAGE 2 ----------
+    # PAGE 2
     page2_img = np.array(pages[1])
     page2_bands = detect_all_horizontal_bands(page2_img)
     page2_centers = select_top_12_by_thickness(page2_bands)
 
-    # Reverse for correct logical order
     page2_centers_reversed = list(reversed(page2_centers))
 
     for disease, y_center in zip(PAGE_2_DISEASES, page2_centers_reversed):
