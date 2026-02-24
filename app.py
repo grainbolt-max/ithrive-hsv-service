@@ -6,7 +6,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v49_header_anchor_band_detect"
+ENGINE_NAME = "hsv_v50_gray_track_hsv_locked"
 API_KEY = "ithrive_secure_2026_key"
 
 DISEASE_KEYS = [
@@ -52,64 +52,66 @@ def risk_label(percent):
 
 def detect_track_bands(image):
     """
-    Detect horizontal dark gray track bands dynamically.
+    Detect horizontal gray track bars using HSV.
     """
 
-    # Crop right half (where tracks live)
     h, w, _ = image.shape
-    right_panel = image[int(h*0.40):int(h*0.90), int(w*0.45):int(w*0.98)]
 
-    gray = cv2.cvtColor(right_panel, cv2.COLOR_BGR2GRAY)
+    # Crop only lower-right panel where tracks exist
+    panel = image[int(h * 0.38):int(h * 0.92),
+                  int(w * 0.48):int(w * 0.98)]
 
-    # Dark gray range
-    mask = cv2.inRange(gray, 90, 140)
+    hsv = cv2.cvtColor(panel, cv2.COLOR_BGR2HSV)
 
-    # Sum pixels horizontally
+    # Detect gray tracks via low saturation + mid value
+    lower_gray = np.array([0, 0, 80])
+    upper_gray = np.array([180, 40, 160])
+
+    mask = cv2.inRange(hsv, lower_gray, upper_gray)
+
+    # Sum mask per row
     row_sum = np.sum(mask, axis=1)
 
-    # Normalize
+    if np.max(row_sum) == 0:
+        return []
+
     row_sum = row_sum / np.max(row_sum)
 
-    # Detect peaks
-    threshold = 0.4
-    band_indices = np.where(row_sum > threshold)[0]
+    # Threshold for strong horizontal presence
+    band_rows = np.where(row_sum > 0.45)[0]
 
-    bands = []
-
-    if len(band_indices) == 0:
+    if len(band_rows) == 0:
         return []
 
     # Group contiguous rows into bands
-    current_band = [band_indices[0]]
+    bands = []
+    current = [band_rows[0]]
 
-    for idx in band_indices[1:]:
-        if idx - current_band[-1] <= 2:
-            current_band.append(idx)
+    for idx in band_rows[1:]:
+        if idx - current[-1] <= 4:
+            current.append(idx)
         else:
-            bands.append(current_band)
-            current_band = [idx]
+            bands.append(current)
+            current = [idx]
 
-    bands.append(current_band)
+    bands.append(current)
 
-    band_centers = [int(np.mean(b)) for b in bands]
+    # Convert band centers to full-image coordinates
+    offset_y = int(h * 0.38)
+    centers = [int(np.mean(b)) + offset_y for b in bands]
 
-    # Convert band centers back to full image coordinates
-    offset_y = int(h*0.40)
-    band_centers = [y + offset_y for y in band_centers]
-
-    return sorted(band_centers)
+    return sorted(centers)
 
 
 def measure_yellow_span(image, center_y):
     h, w, _ = image.shape
 
-    band_height = 18
-    y1 = max(center_y - band_height//2, 0)
-    y2 = min(center_y + band_height//2, h)
+    band_height = 20
+    y1 = max(center_y - band_height // 2, 0)
+    y2 = min(center_y + band_height // 2, h)
 
-    # Track horizontal region
-    x1 = int(w*0.50)
-    x2 = int(w*0.98)
+    x1 = int(w * 0.50)
+    x2 = int(w * 0.98)
 
     roi = image[y1:y2, x1:x2]
 
@@ -136,7 +138,7 @@ def measure_yellow_span(image, center_y):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v49"
+    return "HSV Preprocess Service Running v50"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -157,7 +159,7 @@ def detect_disease_bars():
     except Exception:
         return jsonify({"error": "PDF conversion failed"}), 500
 
-    # Disease bars live on page index 1
+    # Disease bars are on page index 1
     page = pages[1]
     image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
