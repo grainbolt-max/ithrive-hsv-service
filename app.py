@@ -5,9 +5,9 @@ import cv2
 
 app = Flask(__name__)
 
-# =========================
-# DECLARE (HARD CONSTANTS)
-# =========================
+# ==================================================
+# DECLARE (FINAL HARD-LOCKED PRODUCTION CONSTANTS)
+# ==================================================
 
 ENGINE_NAME = "v67_two_page_scoped_global_index_width700"
 API_KEY = "ithrive_secure_2026_key"
@@ -18,20 +18,24 @@ MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
 
-BAR_MIN_WIDTH = 700      # tightened width threshold
-BAR_MIN_HEIGHT = 12      # stable calibrated height
+BAR_MIN_WIDTH = 700      # calibrated width
+BAR_MIN_HEIGHT = 12      # calibrated height
 VERTICAL_SCAN_STEP = 2
 
-# Only scan page 1 and 2 (zero-based indices 0 and 1)
+# Disease bars only exist on first two pages
 DISEASE_PAGE_INDICES = [0, 1]
 
-# Global selector: 0–23
+# --------------------------------------------------
+# FINAL SELECTOR (SET 0–23)
+# Page 1 = 0–11
+# Page 2 = 12–23
+# --------------------------------------------------
 TARGET_GLOBAL_INDEX = 0
 
 
-# =========================
+# ==================================================
 # APPLY
-# =========================
+# ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
 
@@ -57,7 +61,7 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
 
 def detect_all_bars_on_page(img):
 
-    runtime_height, runtime_width, _ = img.shape
+    runtime_height, _, _ = img.shape
 
     height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
     if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
@@ -157,9 +161,9 @@ def detect_progression_percent(pages):
     return total_bars, percent
 
 
-# =========================
-# OUTPUT
-# =========================
+# ==================================================
+# OUTPUT (API ROUTES)
+# ==================================================
 
 @app.route("/")
 def home():
