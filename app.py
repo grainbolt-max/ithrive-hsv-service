@@ -1,190 +1,155 @@
-# ===================================================
-# v38 STRICT HSV (H + S + V) FIXED-SPAN ENGINE
-# Deterministic geometry
-# No track detection
-# PyMuPDF @ 300 DPI
-# ===================================================
-
-import fitz
-import cv2
+import os
+import io
 import numpy as np
+import cv2
 from flask import Flask, request, jsonify
+from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v38_strict_hsv_span_locked"
-AUTH_KEY = "ithrive_secure_2026_key"
+API_KEY = "ithrive_secure_2026_key"
+ENGINE_NAME = "hsv_v39_gray_safe_yellow_track_locked"
 
-# ----------------------------
-# CONFIG
-# ----------------------------
+# ---------- HSV Calibration ----------
+YELLOW_HUE_MIN = 18
+YELLOW_HUE_MAX = 38
+SAT_MIN = 70
+VAL_MIN = 120
 
-SATURATION_THRESHOLD = 40
-VALUE_THRESHOLD = 150
-MIN_COLUMN_DENSITY = 0.35
+# Gray rejection threshold
+GRAY_RGB_DELTA = 12
 
-BAR_LEFT = 350
-BAR_RIGHT = 1100
-BAR_HEIGHT = 26
-ROW_GAP = 44
+ROW_HEIGHT = 48
+TRACK_HEIGHT = 22
+LEFT_MARGIN = 520
+RIGHT_MARGIN = 1150
 
-PAGE1_ROW_START_Y = 455
-PAGE2_ROW_START_Y = 430
-
-DISEASE_ORDER = [
-    "large_artery_stiffness",
-    "peripheral_vessel",
-    "blood_pressure_uncontrolled",
-    "small_medium_artery_stiffness",
+DISEASE_ROWS = [
+    "adhd_children_learning",
     "atherosclerosis",
-    "ldl_cholesterol",
-    "lv_hypertrophy",
-    "metabolic_syndrome",
-    "insulin_resistance",
     "beta_cell_function_decreased",
     "blood_glucose_uncontrolled",
-    "tissue_inflammatory_process",
-    "hypothyroidism",
-    "hyperthyroidism",
-    "hepatic_fibrosis",
-    "chronic_hepatitis",
-    "prostate_cancer",
-    "respiratory_disorders",
-    "kidney_function_disorders",
-    "digestive_disorders",
-    "major_depression",
-    "adhd_children_learning",
+    "blood_pressure_uncontrolled",
     "cerebral_dopamine_decreased",
     "cerebral_serotonin_decreased",
+    "chronic_hepatitis",
+    "digestive_disorders",
+    "hepatic_fibrosis",
+    "hyperthyroidism",
+    "hypothyroidism",
+    "insulin_resistance",
+    "kidney_function_disorders",
+    "large_artery_stiffness",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "major_depression",
+    "metabolic_syndrome",
+    "peripheral_vessel",
+    "prostate_cancer",
+    "respiratory_disorders",
+    "small_medium_artery_stiffness",
+    "tissue_inflammatory_process",
 ]
 
-# ----------------------------
-# RISK LABEL
-# ----------------------------
+# --------------------------------------------------------
 
-def risk_label_from_percent(p):
-    if p >= 75:
-        return "severe"
-    elif p >= 50:
-        return "moderate"
-    elif p >= 25:
-        return "mild"
-    elif p >= 10:
-        return "normal"
-    else:
-        return "none"
-
-# ----------------------------
-# STRICT HSV MASK
-# ----------------------------
-
-def disease_color_mask(hsv):
-    h = hsv[:, :, 0]
-    s = hsv[:, :, 1]
-    v = hsv[:, :, 2]
-
-    red_mask = ((h >= 0) & (h <= 10)) | ((h >= 170) & (h <= 180))
-    orange_mask = (h > 10) & (h <= 22)
-    yellow_mask = (h > 22) & (h <= 38)
-
-    hue_mask = red_mask | orange_mask | yellow_mask
-
+def is_gray_pixel(r, g, b):
     return (
-        hue_mask &
-        (s > SATURATION_THRESHOLD) &
-        (v > VALUE_THRESHOLD)
+        abs(int(r) - int(g)) < GRAY_RGB_DELTA and
+        abs(int(r) - int(b)) < GRAY_RGB_DELTA and
+        abs(int(g) - int(b)) < GRAY_RGB_DELTA
     )
 
-# ----------------------------
-# ANALYZE BAR
-# ----------------------------
+def isolate_yellow_span(track_img):
+    hsv = cv2.cvtColor(track_img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
 
-def analyze_bar(image, base_y, row_index):
-    y1 = base_y + (row_index * ROW_GAP)
-    y2 = y1 + BAR_HEIGHT
+    yellow_mask = (
+        (h >= YELLOW_HUE_MIN) &
+        (h <= YELLOW_HUE_MAX) &
+        (s >= SAT_MIN) &
+        (v >= VAL_MIN)
+    )
 
-    roi = image[y1:y2, BAR_LEFT:BAR_RIGHT]
+    # Explicit gray rejection
+    b, g, r = cv2.split(track_img)
+    gray_mask = np.vectorize(is_gray_pixel)(r, g, b)
 
-    if roi.size == 0:
+    final_mask = yellow_mask & (~gray_mask)
+
+    cols = final_mask.any(axis=0)
+    if not np.any(cols):
         return 0
 
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    mask = disease_color_mask(hsv)
+    span_pixels = np.sum(cols)
+    total_pixels = final_mask.shape[1]
 
-    # Remove stray pixels
-    col_density = np.sum(mask, axis=0) / mask.shape[0]
-    valid_cols = np.where(col_density > MIN_COLUMN_DENSITY)[0]
+    return int((span_pixels / total_pixels) * 100)
 
-    if len(valid_cols) == 0:
-        return 0
 
-    fill_end = valid_cols[-1]
-    total_width = roi.shape[1]
+def classify(percent):
+    if percent >= 80:
+        return "severe"
+    if percent >= 50:
+        return "moderate"
+    if percent >= 25:
+        return "mild"
+    if percent > 0:
+        return "normal"
+    return "none"
 
-    percent = int((fill_end / total_width) * 100)
-    percent = max(0, min(percent, 100))
-
-    return percent
-
-# ----------------------------
-# ROUTES
-# ----------------------------
 
 @app.route("/")
-def home():
-    return "HSV Preprocess Service Running v38"
+def health():
+    return f"HSV Preprocess Service Running v39"
+
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header != f"Bearer {AUTH_KEY}":
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    file_bytes = request.files["file"].read()
-
     try:
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        pdf_bytes = request.files["file"].read()
+        pages = convert_from_bytes(pdf_bytes, dpi=200)
     except:
-        return jsonify({"error": "PDF open failed"}), 500
+        return jsonify({"error": "PDF conversion failed"}), 500
 
     results = {}
-    disease_index = 0
 
-    for page_number in range(min(2, len(doc))):
-        page = doc.load_page(page_number)
-        pix = page.get_pixmap(dpi=300)
+    for page in pages:
+        img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-        img = np.frombuffer(pix.samples, dtype=np.uint8)
-        img = img.reshape(pix.height, pix.width, pix.n)
+        base_y = 520  # tuned for disease section
 
-        if pix.n == 4:
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        for i, disease in enumerate(DISEASE_ROWS):
+            if disease in results:
+                continue
 
-        base_y = PAGE1_ROW_START_Y if page_number == 0 else PAGE2_ROW_START_Y
+            y_center = base_y + (i * ROW_HEIGHT)
+            y1 = int(y_center - TRACK_HEIGHT // 2)
+            y2 = int(y_center + TRACK_HEIGHT // 2)
 
-        for row in range(12):
-            if disease_index >= len(DISEASE_ORDER):
-                break
+            track = img[y1:y2, LEFT_MARGIN:RIGHT_MARGIN]
 
-            percent = analyze_bar(img, base_y, row)
-            label = risk_label_from_percent(percent)
+            percent = isolate_yellow_span(track)
 
-            results[DISEASE_ORDER[disease_index]] = {
+            results[disease] = {
                 "progression_percent": percent,
-                "risk_label": label,
-                "source": ENGINE_NAME
+                "risk_label": classify(percent),
+                "source": ENGINE_NAME,
             }
-
-            disease_index += 1
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "pages_found": len(doc),
+        "pages_found": len(pages),
         "results": results
     })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
