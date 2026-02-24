@@ -6,10 +6,10 @@ import cv2
 app = Flask(__name__)
 
 # ==================================================
-# DECLARE (FINAL LOCKED ENGINE)
+# DECLARE (FINAL STABLE ENGINE WITH DENSITY GUARD)
 # ==================================================
 
-ENGINE_NAME = "v77_full_24_color_detection_locked"
+ENGINE_NAME = "v78_full_24_color_detection_density_guarded"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -21,13 +21,15 @@ BAR_MIN_WIDTH = 700
 BAR_MIN_HEIGHT = 12
 VERTICAL_SCAN_STEP = 2
 
-# Calibrated hue thresholds
+# Hue thresholds (calibrated)
 RED_MAX = 8
 ORANGE_MAX = 20
 YELLOW_MAX = 40
 
-# Lowered saturation threshold based on real calibration
 SATURATION_THRESHOLD = 20
+
+# NEW: minimum percentage of colored pixels required
+MIN_COLOR_RATIO = 0.08  # 8% of sample must be colored
 
 PAGE_1_DISEASES = [
     "large_artery_stiffness",
@@ -61,7 +63,7 @@ PAGE_2_DISEASES = [
 
 
 # ==================================================
-# DETECTION (STABLE V67 LOGIC)
+# DETECTION (UNCHANGED V67 LOGIC)
 # ==================================================
 
 def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
@@ -130,7 +132,7 @@ def detect_all_bars_on_page(img):
 
 
 # ==================================================
-# COLOR CLASSIFICATION (STRIPE-BASED)
+# COLOR CLASSIFICATION WITH DENSITY GUARD
 # ==================================================
 
 def classify_color_from_bar(img, y_center):
@@ -147,20 +149,25 @@ def classify_color_from_bar(img, y_center):
 
     x_start = nonzero[0]
 
-    y1 = max(0, y_center - 4)
-    y2 = min(img.shape[0], y_center + 4)
+    y1 = max(0, y_center - 3)
+    y2 = min(img.shape[0], y_center + 3)
     x1 = x_start + 5
-    x2 = min(img.shape[1], x_start + 80)
+    x2 = min(img.shape[1], x_start + 30)
 
     sample = hsv[y1:y2, x1:x2]
 
     sat = sample[:, :, 1]
     hue = sample[:, :, 0]
 
-    # Detect stripe pixels
     mask = sat > SATURATION_THRESHOLD
 
-    if np.sum(mask) == 0:
+    colored_pixels = np.sum(mask)
+    total_pixels = mask.size
+
+    ratio = colored_pixels / total_pixels
+
+    # Density guard
+    if ratio < MIN_COLOR_RATIO:
         return "none"
 
     dominant_hue = float(np.mean(hue[mask]))
@@ -178,7 +185,7 @@ def classify_color_from_bar(img, y_center):
 
 
 # ==================================================
-# MAIN 24-DISEASE MAPPING
+# MAIN MAPPING
 # ==================================================
 
 def detect_all_24_diseases(pages):
