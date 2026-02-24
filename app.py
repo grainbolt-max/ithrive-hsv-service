@@ -1,74 +1,21 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
-import json
+import numpy as np
+import cv2
+from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v82_pdf_diagnostic_extractor"
+ENGINE_NAME = "v83_geometry_diagnostic_engine"
 API_KEY = "ithrive_secure_2026_key"
 
-# ==================================================
-# DIAGNOSTIC EXTRACTION
-# ==================================================
+TARGET_PAGE_INDEX = 1  # Page 2 visually (0-based index)
 
-def extract_page_diagnostics(page):
+TOP_CROP_RATIO = 0.32      # remove Homeostasis section
+BOTTOM_CROP_RATIO = 0.06   # remove legend color bar
+ROW_COUNT = 24
+LEFT_SCAN_RATIO = 0.65     # only scan left portion for stripe
+SAT_THRESHOLD = 40         # minimum saturation to count as colored
 
-    drawings = page.get_drawings()
-    xobjects = page.get_xobjects()
-    text_raw = page.get_text("rawdict")
-
-    drawing_summary = []
-
-    for d in drawings:
-        entry = {
-            "type": d.get("type"),
-            "stroke_color": d.get("color"),
-            "fill_color": d.get("fill"),
-            "width": d.get("width"),
-            "items_count": len(d.get("items", [])),
-            "rect": str(d.get("rect"))
-        }
-        drawing_summary.append(entry)
-
-    xobject_summary = []
-
-    for xo in xobjects:
-        xobject_summary.append({
-            "xref": xo[0],
-            "name": xo[1],
-            "width": xo[2],
-            "height": xo[3]
-        })
-
-    return {
-        "drawings_count": len(drawings),
-        "drawings": drawing_summary[:100],  # limit size
-        "xobjects_count": len(xobjects),
-        "xobjects": xobject_summary,
-        "text_blocks": len(text_raw.get("blocks", []))
-    }
-
-
-# ==================================================
-# MAIN
-# ==================================================
-
-def diagnose_pdf(pdf_bytes):
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    results = {}
-
-    for page_index in [0, 1]:
-        page = doc[page_index]
-        results[f"page_{page_index+1}"] = extract_page_diagnostics(page)
-
-    return results
-
-
-# ==================================================
-# ROUTES
-# ==================================================
 
 @app.route("/")
 def home():
@@ -85,22 +32,88 @@ def detect_disease_bars():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
-    pdf_file = request.files["file"]
-    pdf_bytes = pdf_file.read()
+    pdf_bytes = request.files["file"].read()
 
-    try:
-        diagnostics = diagnose_pdf(pdf_bytes)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-        return jsonify({
-            "engine": ENGINE_NAME,
-            "diagnostics": diagnostics
+    if TARGET_PAGE_INDEX >= len(pages):
+        return jsonify({"error": "Target page index not found"}), 400
+
+    page = pages[TARGET_PAGE_INDEX]
+    page_img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+
+    h, w, _ = page_img.shape
+
+    # ---- Vertical crop ----
+    top_crop = int(h * TOP_CROP_RATIO)
+    bottom_crop = int(h * (1 - BOTTOM_CROP_RATIO))
+
+    disease_region = page_img[top_crop:bottom_crop, :]
+
+    region_h, region_w, _ = disease_region.shape
+    row_height = region_h // ROW_COUNT
+
+    diagnostics = []
+
+    for i in range(ROW_COUNT):
+
+        y1 = i * row_height
+        y2 = (i + 1) * row_height if i < ROW_COUNT - 1 else region_h
+
+        row_img = disease_region[y1:y2, :]
+
+        scan_width = int(region_w * LEFT_SCAN_RATIO)
+        scan_region = row_img[:, :scan_width]
+
+        hsv = cv2.cvtColor(scan_region, cv2.COLOR_BGR2HSV)
+
+        saturation = hsv[:, :, 1]
+        value = hsv[:, :, 2]
+
+        # Mask colored pixels (exclude low saturation / white)
+        colored_mask = (saturation > SAT_THRESHOLD) & (value > 40)
+
+        colored_pixels = np.sum(colored_mask)
+        total_pixels = colored_mask.size
+
+        stripe_density = float(colored_pixels) / float(total_pixels)
+
+        # Width ratio (how far stripe extends horizontally)
+        col_sums = np.sum(colored_mask, axis=0)
+        nonzero_cols = np.where(col_sums > 0)[0]
+
+        if len(nonzero_cols) > 0:
+            stripe_width_ratio = float(nonzero_cols.max()) / float(scan_width)
+        else:
+            stripe_width_ratio = 0.0
+
+        # Average HSV of colored pixels
+        if colored_pixels > 0:
+            avg_h = float(np.mean(hsv[:, :, 0][colored_mask]))
+            avg_s = float(np.mean(hsv[:, :, 1][colored_mask]))
+            avg_v = float(np.mean(hsv[:, :, 2][colored_mask]))
+        else:
+            avg_h, avg_s, avg_v = 0.0, 0.0, 0.0
+
+        diagnostics.append({
+            "row_index": i + 1,
+            "y_top_absolute": int(top_crop + y1),
+            "y_bottom_absolute": int(top_crop + y2),
+            "stripe_pixel_density": round(stripe_density, 4),
+            "stripe_width_ratio": round(stripe_width_ratio, 4),
+            "avg_hsv": [
+                round(avg_h, 2),
+                round(avg_s, 2),
+                round(avg_v, 2)
+            ]
         })
 
-    except Exception as e:
-        return jsonify({
-            "engine": ENGINE_NAME,
-            "error": str(e)
-        }), 500
+    return jsonify({
+        "engine": ENGINE_NAME,
+        "page_index_processed": TARGET_PAGE_INDEX,
+        "rows_detected": ROW_COUNT,
+        "diagnostics": diagnostics
+    })
 
 
 if __name__ == "__main__":
