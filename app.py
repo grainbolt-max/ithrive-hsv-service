@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v57_deterministic_scaled_anchor"
+ENGINE_NAME = "v58_deterministic_scaled_window"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -17,17 +17,36 @@ DPI_LOCK = 200
 EXPECTED_PROBE_WIDTH = 1700
 EXPECTED_PROBE_HEIGHT = 2200
 
-EXPECTED_ANCHOR_Y = 1022  # Derived from geometry probe at 2200px height
+EXPECTED_ANCHOR_Y = 1022  # baseline from geometry probe
 MAX_HEIGHT_DRIFT_RATIO = 0.03  # 3% hard fail
 
 BAR_X_START = 400
 BAR_X_END = 1500
 BAR_SAMPLE_THICKNESS = 4
 
+VERTICAL_SCAN_RANGE = 60  # deterministic bounded scan
+
 
 # =========================
 # APPLY (PURE GEOMETRY)
 # =========================
+
+def compute_progression_for_y(img, y):
+    y1 = y - BAR_SAMPLE_THICKNESS // 2
+    y2 = y + BAR_SAMPLE_THICKNESS // 2
+
+    bar_slice = img[y1:y2, BAR_X_START:BAR_X_END]
+
+    hsv = cv2.cvtColor(bar_slice, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+
+    mask = saturation > 30
+
+    filled_pixels = np.sum(mask)
+    total_pixels = mask.size
+
+    return int((filled_pixels / total_pixels) * 100)
+
 
 def detect_progression_percent(img):
 
@@ -43,26 +62,25 @@ def detect_progression_percent(img):
 
     # --- Deterministic scaling ---
     scale = runtime_height / EXPECTED_PROBE_HEIGHT
-    anchor_y = int(EXPECTED_ANCHOR_Y * scale)
+    scaled_anchor = int(EXPECTED_ANCHOR_Y * scale)
 
-    # --- Extract bar slice ---
-    y1 = anchor_y - BAR_SAMPLE_THICKNESS // 2
-    y2 = anchor_y + BAR_SAMPLE_THICKNESS // 2
+    # --- Deterministic vertical scan window ---
+    best_percent = 0
+    best_y = scaled_anchor
 
-    bar_slice = img[y1:y2, BAR_X_START:BAR_X_END]
+    for offset in range(-VERTICAL_SCAN_RANGE, VERTICAL_SCAN_RANGE + 1):
+        y = scaled_anchor + offset
 
-    hsv = cv2.cvtColor(bar_slice, cv2.COLOR_BGR2HSV)
+        if y < 10 or y > runtime_height - 10:
+            continue
 
-    # Detect non-white pixels
-    saturation = hsv[:, :, 1]
-    mask = saturation > 30
+        percent = compute_progression_for_y(img, y)
 
-    filled_pixels = np.sum(mask)
-    total_pixels = mask.size
+        if percent > best_percent:
+            best_percent = percent
+            best_y = y
 
-    progression_percent = int((filled_pixels / total_pixels) * 100)
-
-    return progression_percent
+    return best_percent
 
 
 # =========================
