@@ -6,8 +6,21 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "hsv_v51_contour_locked_deterministic"
+ENGINE_NAME = "hsv_v52_pure_coordinate_deterministic_locked"
 API_KEY = "ithrive_secure_2026_key"
+
+# ==== LOCKED GEOMETRY (Measured From 1700x2200 Page) ====
+PAGE_WIDTH = 1700
+PAGE_HEIGHT = 2200
+
+PANEL_X1 = 850
+PANEL_X2 = 1630
+
+PANEL_Y1 = 980
+PANEL_Y2 = 1750
+
+ROW_COUNT = 24
+ROW_HEIGHT = int((PANEL_Y2 - PANEL_Y1) / ROW_COUNT)
 
 DISEASE_KEYS = [
     "adhd_children_learning",
@@ -50,67 +63,7 @@ def risk_label(percent):
         return "none"
 
 
-def detect_track_bands(image):
-    """
-    Detect horizontal track rectangles using contour geometry.
-    """
-
-    h, w, _ = image.shape
-
-    # Crop right panel
-    panel = image[int(h * 0.35):int(h * 0.92),
-                  int(w * 0.45):int(w * 0.98)]
-
-    gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY)
-
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    thresh = cv2.adaptiveThreshold(
-        blur,
-        255,
-        cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV,
-        21,
-        5
-    )
-
-    # Emphasize horizontal shapes
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 5))
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(
-        morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    centers = []
-
-    for cnt in contours:
-        x, y, cw, ch = cv2.boundingRect(cnt)
-
-        # Filter by geometry
-        if cw > panel.shape[1] * 0.6 and 10 < ch < 35:
-            center_y = y + ch // 2
-            centers.append(center_y)
-
-    # Convert back to full image coordinates
-    offset_y = int(h * 0.35)
-    centers = [c + offset_y for c in centers]
-
-    return sorted(centers)
-
-
-def measure_yellow_span(image, center_y):
-    h, w, _ = image.shape
-
-    band_height = 20
-    y1 = max(center_y - band_height // 2, 0)
-    y2 = min(center_y + band_height // 2, h)
-
-    x1 = int(w * 0.50)
-    x2 = int(w * 0.98)
-
-    roi = image[y1:y2, x1:x2]
-
+def measure_yellow_span(roi):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
     lower_yellow = np.array([20, 110, 120])
@@ -134,7 +87,7 @@ def measure_yellow_span(image, center_y):
 
 @app.route("/")
 def home():
-    return "HSV Preprocess Service Running v51"
+    return "HSV Preprocess Service Running v52"
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -155,18 +108,27 @@ def detect_disease_bars():
     except Exception:
         return jsonify({"error": "PDF conversion failed"}), 500
 
+    # Disease bars live on page index 1
     page = pages[1]
     image = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-    band_centers = detect_track_bands(image)
+    h, w, _ = image.shape
+
+    if h != PAGE_HEIGHT or w != PAGE_WIDTH:
+        return jsonify({
+            "error": f"Unexpected page size {w}x{h}, expected 1700x2200"
+        }), 400
 
     results = {}
 
-    for i, center_y in enumerate(band_centers):
-        if i >= len(DISEASE_KEYS):
-            break
+    for i in range(ROW_COUNT):
 
-        percent = measure_yellow_span(image, center_y)
+        y1 = PANEL_Y1 + i * ROW_HEIGHT
+        y2 = y1 + ROW_HEIGHT
+
+        roi = image[y1:y2, PANEL_X1:PANEL_X2]
+
+        percent = measure_yellow_span(roi)
 
         results[DISEASE_KEYS[i]] = {
             "progression_percent": percent,
@@ -177,7 +139,7 @@ def detect_disease_bars():
     return jsonify({
         "engine": ENGINE_NAME,
         "pages_found": len(pages),
-        "bands_detected": len(band_centers),
+        "row_height": ROW_HEIGHT,
         "results": results
     })
 
