@@ -9,7 +9,7 @@ app = Flask(__name__)
 # DECLARE (HARD CONSTANTS)
 # =========================
 
-ENGINE_NAME = "v62_vertical_band_height_filtered"
+ENGINE_NAME = "v63_multi_page_global_index_lock"
 API_KEY = "ithrive_secure_2026_key"
 
 DPI_LOCK = 200
@@ -18,11 +18,11 @@ MAX_HEIGHT_DRIFT_RATIO = 0.03
 
 VALUE_NONWHITE_THRESHOLD = 245
 
-BAR_MIN_WIDTH = 600       # real disease bars are wide
-BAR_MIN_HEIGHT = 14       # eliminate thin dividers
+BAR_MIN_WIDTH = 600
+BAR_MIN_HEIGHT = 14
 VERTICAL_SCAN_STEP = 2
 
-TARGET_ROW_INDEX = 0      # <-- CHANGE THIS
+TARGET_GLOBAL_INDEX = 0  # <-- SET 0–23
 
 
 # =========================
@@ -34,7 +34,6 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
     y_top = start_y
     y_bottom = start_y
 
-    # scan upward
     while y_top > 0:
         row = value_channel[y_top, x_start:x_end]
         if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
@@ -42,7 +41,6 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
         else:
             break
 
-    # scan downward
     while y_bottom < height - 1:
         row = value_channel[y_bottom, x_start:x_end]
         if np.mean(row) < VALUE_NONWHITE_THRESHOLD:
@@ -53,9 +51,16 @@ def measure_vertical_band(value_channel, start_y, x_start, x_end, height):
     return y_top, y_bottom
 
 
-def detect_all_bars(img):
+def detect_all_bars_on_page(img):
 
     runtime_height, runtime_width, _ = img.shape
+
+    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
+    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
+        raise RuntimeError(
+            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
+        )
+
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     value = hsv[:, :, 2]
 
@@ -87,8 +92,7 @@ def detect_all_bars(img):
 
         y += VERTICAL_SCAN_STEP
 
-    detected_sorted = sorted(detected)
-    return detected_sorted
+    return sorted(detected)
 
 
 def compute_bar_fill(img, y_center):
@@ -118,28 +122,33 @@ def compute_bar_fill(img, y_center):
     return int((filled_pixels / total_pixels) * 100)
 
 
-def detect_progression_percent(img):
+def detect_progression_percent(pages):
 
-    runtime_height, runtime_width, _ = img.shape
+    global_bars = []
 
-    height_ratio = abs(runtime_height - EXPECTED_PROBE_HEIGHT) / EXPECTED_PROBE_HEIGHT
-    if height_ratio > MAX_HEIGHT_DRIFT_RATIO:
-        raise RuntimeError(
-            f"Height drift too large. Expected {EXPECTED_PROBE_HEIGHT}, got {runtime_height}"
-        )
+    # Collect bars from all pages in order
+    for page_index, page in enumerate(pages):
 
-    bars = detect_all_bars(img)
+        img = np.array(page)
+        bars = detect_all_bars_on_page(img)
 
-    if len(bars) == 0:
+        for y_center in bars:
+            global_bars.append((page_index, y_center))
+
+    total_bars = len(global_bars)
+
+    if total_bars == 0:
         return 0, 0
 
-    if TARGET_ROW_INDEX >= len(bars):
-        return len(bars), 0
+    if TARGET_GLOBAL_INDEX >= total_bars:
+        return total_bars, 0
 
-    target_y = bars[TARGET_ROW_INDEX]
-    percent = compute_bar_fill(img, target_y)
+    page_index, y_center = global_bars[TARGET_GLOBAL_INDEX]
+    img = np.array(pages[page_index])
 
-    return len(bars), percent
+    percent = compute_bar_fill(img, y_center)
+
+    return total_bars, percent
 
 
 # =========================
@@ -173,9 +182,8 @@ def detect_disease_bars():
         )
 
         pages_found = len(pages)
-        img = np.array(pages[0])
 
-        bars_detected, progression_percent = detect_progression_percent(img)
+        bars_detected, progression_percent = detect_progression_percent(pages)
 
         results = {
             "selected_row": {
@@ -188,7 +196,7 @@ def detect_disease_bars():
         return jsonify({
             "engine": ENGINE_NAME,
             "pages_found": pages_found,
-            "bars_detected": bars_detected,
+            "bars_detected_total": bars_detected,
             "results": results
         })
 
