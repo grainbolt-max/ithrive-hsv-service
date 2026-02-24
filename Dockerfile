@@ -1,18 +1,15 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (REQUIRED for pdf2image)
+RUN apt-get update && \
+    apt-get install -y poppler-utils && \
+    apt-get clean
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-ENV PORT=10000
 
 CMD ["python", "app.py"]
