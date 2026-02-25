@@ -5,7 +5,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v91_center_band_locked_production_engine"
+ENGINE_NAME = "v92_calibrated_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 
 TARGET_PAGE_INDEX = 1
@@ -14,8 +14,8 @@ BOTTOM_CROP_RATIO = 0.06
 ROW_COUNT = 24
 LEFT_SCAN_RATIO = 0.65
 
-# Stripe detection thresholds
-SAT_THRESHOLD = 150
+# Stripe detection
+SAT_THRESHOLD = 100
 VAL_THRESHOLD = 60
 COLUMN_DENSITY_THRESHOLD = 0.20
 
@@ -23,7 +23,7 @@ COLUMN_DENSITY_THRESHOLD = 0.20
 MIN_WIDTH_RATIO = 0.15
 MAX_WIDTH_RATIO = 0.80
 
-# Vertical center band (prevents bleed)
+# Center-band lock
 CENTER_TOP_RATIO = 0.30
 CENTER_BOTTOM_RATIO = 0.70
 
@@ -73,9 +73,6 @@ def detect():
     pdf_bytes = request.files["file"].read()
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    if TARGET_PAGE_INDEX >= len(pages):
-        return jsonify({"error": "Target page not found"}), 400
-
     page = pages[TARGET_PAGE_INDEX]
     page_img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
@@ -87,7 +84,6 @@ def detect():
 
     region_h, region_w, _ = disease_region.shape
     row_height = region_h // ROW_COUNT
-
     scan_width = int(region_w * LEFT_SCAN_RATIO)
 
     results = {}
@@ -95,9 +91,7 @@ def detect():
     for i in range(ROW_COUNT):
 
         y1 = i * row_height
-        y2 = (i + 1) * row_height if i < ROW_COUNT - 1 else region_h
 
-        # 🔒 CENTER-BAND LOCK
         center_top = int(y1 + row_height * CENTER_TOP_RATIO)
         center_bottom = int(y1 + row_height * CENTER_BOTTOM_RATIO)
 
@@ -119,19 +113,28 @@ def detect():
             stripe_width_ratio = (stripe_cols[-1] - stripe_cols[0]) / scan_width
 
             if MIN_WIDTH_RATIO <= stripe_width_ratio <= MAX_WIDTH_RATIO:
+
                 valid = colored_mask > 0
                 if np.sum(valid) > 0:
-                    avg_h = float(np.mean(hsv[:, :, 0][valid]))
 
-                    # 🔒 Hue classification only
-                    if 0 <= avg_h <= 10:
-                        severity = "severe"
-                    elif 10 < avg_h <= 22:
-                        severity = "moderate"
-                    elif 22 < avg_h <= 40:
-                        severity = "mild"
-                    else:
+                    avg_h = float(np.mean(hsv[:, :, 0][valid]))
+                    avg_s = float(np.mean(hsv[:, :, 1][valid]))
+                    avg_v = float(np.mean(hsv[:, :, 2][valid]))
+
+                    # 🔒 Grey rejection guard
+                    if avg_s < 80 or avg_v > 210:
                         severity = "none"
+
+                    else:
+                        # 🔒 Red wraparound detection
+                        if (0 <= avg_h <= 10) or (170 <= avg_h <= 179):
+                            severity = "severe"
+                        elif 10 < avg_h <= 25:
+                            severity = "moderate"
+                        elif 25 < avg_h <= 45:
+                            severity = "mild"
+                        else:
+                            severity = "none"
 
         results[DISEASE_KEYS[i]] = {
             "risk_label": severity,
