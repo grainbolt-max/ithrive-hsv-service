@@ -5,10 +5,20 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v95_widened_center_band_production_classifier"
+ENGINE_NAME = "v96_stripe_isolated_calibrated_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 
-# === Disease Order (Top → Bottom, Page 2) ===
+ROW_COUNT = 24
+PAGE_INDEX = 1  # Page 2
+
+# Stripe extraction thresholds
+SAT_MASK_THRESHOLD = 40
+VAL_MASK_THRESHOLD = 40
+COLUMN_DENSITY_THRESHOLD = 0.25
+MIN_STRIPE_WIDTH_RATIO = 0.10
+MAX_STRIPE_WIDTH_RATIO = 0.80
+
+# Disease order (top → bottom)
 DISEASES = [
     "adhd_children_learning",
     "atherosclerosis",
@@ -36,29 +46,23 @@ DISEASES = [
     "tissue_inflammatory_process"
 ]
 
-ROW_COUNT = 24
-
-# 🔧 Widened stripe capture window (adjusted from v94)
-CENTER_X_START_RATIO = 0.25
-CENTER_X_END_RATIO   = 0.75
-
 
 def classify_color(h, s, v):
 
-    # Light Grey → None
+    # Light grey / none
     if s < 20:
         return "none"
 
     # Severe (Red)
-    if (0 <= h <= 25) and (s > 180) and (50 <= v <= 230):
+    if (0 <= h <= 25 or 170 <= h <= 179) and s > 150:
         return "severe"
 
     # Moderate (Orange)
-    if (20 < h <= 40) and (s > 100) and (60 <= v <= 230):
+    if 20 < h <= 40 and s > 100:
         return "moderate"
 
     # Mild (Yellow)
-    if (40 < h <= 70) and (s > 120) and (80 <= v <= 240):
+    if 40 < h <= 70 and s > 100:
         return "mild"
 
     return "none"
@@ -70,10 +74,9 @@ def home():
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect_disease_bars():
+def detect():
 
-    auth_header = request.headers.get("Authorization")
-    if auth_header != f"Bearer {API_KEY}":
+    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     if "file" not in request.files:
@@ -86,11 +89,10 @@ def detect_disease_bars():
     except:
         return jsonify({"error": "Invalid PDF"}), 400
 
-    page_index = 1  # Page 2
-    if len(doc) <= page_index:
+    if len(doc) <= PAGE_INDEX:
         return jsonify({"error": "Page 2 not found"}), 400
 
-    page = doc[page_index]
+    page = doc[PAGE_INDEX]
     pix = page.get_pixmap(dpi=200)
 
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
@@ -101,48 +103,65 @@ def detect_disease_bars():
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     h_img, w_img = hsv.shape[:2]
-
-    x_start = int(w_img * CENTER_X_START_RATIO)
-    x_end   = int(w_img * CENTER_X_END_RATIO)
-
     row_height = h_img // ROW_COUNT
 
     results = {}
 
     for i in range(ROW_COUNT):
 
-        y_top = i * row_height
-        y_bottom = (i + 1) * row_height
+        y1 = i * row_height
+        y2 = (i + 1) * row_height
 
-        row_slice = hsv[y_top:y_bottom, x_start:x_end]
+        row = hsv[y1:y2, :]
 
-        if row_slice.size == 0:
-            results[DISEASES[i]] = {
-                "risk_label": "none",
-                "source": ENGINE_NAME
-            }
+        if row.size == 0:
+            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
             continue
 
-        # Filter out white/near-white
-        mask = row_slice[:, :, 1] > 20
-        colored_pixels = row_slice[mask]
+        sat = row[:, :, 1]
+        val = row[:, :, 2]
 
-        if len(colored_pixels) < 50:
-            risk = "none"
-        else:
-            avg_h = np.mean(colored_pixels[:, 0])
-            avg_s = np.mean(colored_pixels[:, 1])
-            avg_v = np.mean(colored_pixels[:, 2])
-            risk = classify_color(avg_h, avg_s, avg_v)
+        colored_mask = (sat > SAT_MASK_THRESHOLD) & (val > VAL_MASK_THRESHOLD)
+
+        col_density = np.sum(colored_mask, axis=0) / row.shape[0]
+        stripe_cols = np.where(col_density > COLUMN_DENSITY_THRESHOLD)[0]
+
+        if len(stripe_cols) == 0:
+            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
+            continue
+
+        # Identify largest contiguous block
+        groups = np.split(stripe_cols, np.where(np.diff(stripe_cols) != 1)[0] + 1)
+        largest_group = max(groups, key=len)
+
+        stripe_width_ratio = len(largest_group) / w_img
+
+        if not (MIN_STRIPE_WIDTH_RATIO <= stripe_width_ratio <= MAX_STRIPE_WIDTH_RATIO):
+            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
+            continue
+
+        stripe_region = row[:, largest_group]
+
+        stripe_pixels = stripe_region[colored_mask[:, largest_group]]
+
+        if len(stripe_pixels) < 50:
+            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
+            continue
+
+        avg_h = float(np.mean(stripe_pixels[:, 0]))
+        avg_s = float(np.mean(stripe_pixels[:, 1]))
+        avg_v = float(np.mean(stripe_pixels[:, 2]))
+
+        severity = classify_color(avg_h, avg_s, avg_v)
 
         results[DISEASES[i]] = {
-            "risk_label": risk,
+            "risk_label": severity,
             "source": ENGINE_NAME
         }
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "page_index_processed": page_index,
+        "page_index_processed": PAGE_INDEX,
         "results": results
     })
 
