@@ -5,7 +5,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v87_hue_locked_final_classifier"
+ENGINE_NAME = "v88_final_locked_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 
 TARGET_PAGE_INDEX = 1
@@ -19,6 +19,7 @@ VAL_THRESHOLD = 60
 COLUMN_DENSITY_THRESHOLD = 0.20
 MAX_GAP_COLUMNS = 2
 
+MIN_VALID_WIDTH = 0.15
 ARTIFACT_WIDTH_REJECT = 0.80
 
 DISEASE_KEYS = [
@@ -119,7 +120,11 @@ def detect():
 
         severity = "none"
 
+        # 🔒 LOCKED WIDTH GUARDS
         if stripe_width_ratio == 0.0:
+            severity = "none"
+
+        elif stripe_width_ratio < MIN_VALID_WIDTH:
             severity = "none"
 
         elif stripe_width_ratio > ARTIFACT_WIDTH_REJECT:
@@ -133,7 +138,6 @@ def detect():
             if np.sum(valid) > 0:
                 avg_h = float(np.mean(stripe_hsv[:, :, 0][valid]))
 
-                # 🔒 Hue-based classification
                 if 0 <= avg_h <= 10:
                     severity = "severe"
                 elif 10 < avg_h <= 22:
