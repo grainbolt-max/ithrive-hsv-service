@@ -1,14 +1,14 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
+import fitz
 import numpy as np
 import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v102_image_extracted_color_isolated_production_classifier"
+ENGINE_NAME = "v103_image_extracted_auto_band_detection_classifier"
 API_KEY = "ithrive_secure_2026_key"
-PAGE_INDEX = 1  # Page 2 (0-based)
-ROWS_PER_PANEL = 12
+PAGE_INDEX = 1
+EXPECTED_ROWS = 12
 
 DISEASES = [
     "adhd_children_learning",
@@ -39,18 +39,12 @@ DISEASES = [
 
 
 def classify_hsv(h, s, v):
-    # severe (red)
     if (h < 10 or h > 170) and s > 120:
         return "severe"
-
-    # moderate (orange)
     if 10 <= h <= 25 and s > 120:
         return "moderate"
-
-    # mild (yellow)
     if 25 < h <= 40 and s > 100:
         return "mild"
-
     return "none"
 
 
@@ -68,22 +62,49 @@ def extract_image_by_index(page, image_index):
     return img
 
 
+def detect_horizontal_bands(img):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    # saturation mask
+    sat_mask = hsv[:, :, 1] > 80
+
+    # horizontal projection
+    row_sums = sat_mask.sum(axis=1)
+
+    bands = []
+    in_band = False
+    start = 0
+
+    for i, val in enumerate(row_sums):
+        if val > 50 and not in_band:
+            in_band = True
+            start = i
+        elif val <= 50 and in_band:
+            in_band = False
+            end = i
+            if end - start > 5:
+                bands.append((start, end))
+
+    # sort by height (largest bands)
+    bands = sorted(bands, key=lambda x: x[1] - x[0], reverse=True)
+
+    return bands[:EXPECTED_ROWS]
+
+
 def classify_panel(img):
     h, w, _ = img.shape
-    row_height = h // ROWS_PER_PANEL
+    bands = detect_horizontal_bands(img)
+
+    # sort top to bottom
+    bands = sorted(bands, key=lambda x: x[0])
+
     results = []
 
-    for i in range(ROWS_PER_PANEL):
-        y1 = i * row_height
-        y2 = (i + 1) * row_height
-
+    for (y1, y2) in bands:
         band = img[y1:y2, int(w * 0.2):int(w * 0.8)]
-
         hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
 
-        # Mask only saturated pixels (ignore white/grey)
-        mask = hsv[:, :, 1] > 80  # saturation threshold
-
+        mask = hsv[:, :, 1] > 80
         if np.count_nonzero(mask) < 50:
             results.append("none")
             continue
@@ -94,6 +115,10 @@ def classify_panel(img):
 
         severity = classify_hsv(h_val, s_val, v_val)
         results.append(severity)
+
+    # pad if fewer detected
+    while len(results) < EXPECTED_ROWS:
+        results.append("none")
 
     return results
 
