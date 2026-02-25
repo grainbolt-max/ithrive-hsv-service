@@ -5,52 +5,117 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v104_band_diagnostic_engine"
+ENGINE_NAME = "v105_row_first_stripe_isolation_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 PAGE_INDEX = 1
+ROWS_PER_PANEL = 12
+
+DISEASES = [
+    "adhd_children_learning",
+    "atherosclerosis",
+    "beta_cell_function_decreased",
+    "blood_glucose_uncontrolled",
+    "blood_pressure_uncontrolled",
+    "cerebral_dopamine_serotonin",
+    "chronic_hepatitis",
+    "diabetes",
+    "digestive_disorders",
+    "hepatic_fibrosis",
+    "hyperthyroidism",
+    "hypothyroidism",
+    "insulin_resistance",
+    "kidney_function_disorders",
+    "large_artery_stiffness",
+    "ldl_cholesterol",
+    "lv_hypertrophy",
+    "major_depression",
+    "metabolic_syndrome",
+    "peripheral_vessel",
+    "prostate_cancer",
+    "respiratory_disorders",
+    "small_medium_artery_stiffness",
+    "tissue_inflammatory_process"
+]
+
+
+def classify_hsv(h, s, v):
+    if (h < 10 or h > 170) and s > 120:
+        return "severe"
+    if 10 <= h <= 25 and s > 120:
+        return "moderate"
+    if 25 < h <= 40 and s > 100:
+        return "mild"
+    return "none"
 
 
 def extract_image_by_index(page, image_index):
     images = page.get_images(full=True)
-    if image_index >= len(images):
-        return None
-
     xref = images[image_index][0]
     base_image = page.parent.extract_image(xref)
     image_bytes = base_image["image"]
-
     np_img = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-    return img
+    return cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
 
-def detect_horizontal_bands(img):
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+def classify_panel(panel_img):
+    h, w, _ = panel_img.shape
+    row_height = h // ROWS_PER_PANEL
+    results = []
 
-    # saturation mask
-    sat_mask = hsv[:, :, 1] > 80
+    for i in range(ROWS_PER_PANEL):
+        y1 = i * row_height
+        y2 = (i + 1) * row_height
+        row = panel_img[y1:y2, :]
 
-    row_sums = sat_mask.sum(axis=1)
+        hsv = cv2.cvtColor(row, cv2.COLOR_BGR2HSV)
+        sat_mask = hsv[:, :, 1] > 80
 
-    bands = []
-    in_band = False
-    start = 0
+        if np.count_nonzero(sat_mask) < 20:
+            results.append("none")
+            continue
 
-    for i, val in enumerate(row_sums):
-        if val > 50 and not in_band:
-            in_band = True
-            start = i
-        elif val <= 50 and in_band:
-            in_band = False
-            end = i
-            if end - start > 3:
-                bands.append({
-                    "start_y": int(start),
-                    "end_y": int(end),
-                    "height": int(end - start)
-                })
+        # Collapse vertically to detect horizontal stripe cluster
+        col_sums = sat_mask.sum(axis=0)
 
-    return bands
+        # Find contiguous region with saturation
+        in_cluster = False
+        start = 0
+        clusters = []
+
+        for j, val in enumerate(col_sums):
+            if val > 5 and not in_cluster:
+                in_cluster = True
+                start = j
+            elif val <= 5 and in_cluster:
+                in_cluster = False
+                end = j
+                if end - start > 10:
+                    clusters.append((start, end))
+
+        if not clusters:
+            results.append("none")
+            continue
+
+        # Choose widest cluster (actual stripe)
+        cluster = max(clusters, key=lambda x: x[1] - x[0])
+        x1, x2 = cluster
+
+        stripe = row[:, x1:x2]
+        hsv_stripe = cv2.cvtColor(stripe, cv2.COLOR_BGR2HSV)
+
+        mask = hsv_stripe[:, :, 1] > 80
+        if np.count_nonzero(mask) < 20:
+            results.append("none")
+            continue
+
+        colored_pixels = hsv_stripe[mask]
+        avg = colored_pixels.mean(axis=0)
+        h_val, s_val, v_val = avg
+
+        severity = classify_hsv(h_val, s_val, v_val)
+        results.append(severity)
+
+    return results
 
 
 @app.route("/")
@@ -59,8 +124,7 @@ def home():
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def inspect():
-
+def detect():
     if request.headers.get("Authorization") != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -70,28 +134,29 @@ def inspect():
     file_bytes = request.files["file"].read()
     doc = fitz.open(stream=file_bytes, filetype="pdf")
 
-    if len(doc) <= PAGE_INDEX:
-        return jsonify({"error": "Page 2 not found"}), 400
-
     page = doc[PAGE_INDEX]
 
+    # image 1 = homeostasis
+    # image 2 = disease rows 1-12
+    # image 3 = disease rows 13-24
     panel1 = extract_image_by_index(page, 1)
     panel2 = extract_image_by_index(page, 2)
 
-    if panel1 is None or panel2 is None:
-        return jsonify({"error": "Disease panels not found"}), 400
+    results1 = classify_panel(panel1)
+    results2 = classify_panel(panel2)
 
-    bands1 = detect_horizontal_bands(panel1)
-    bands2 = detect_horizontal_bands(panel2)
+    combined = results1 + results2
+
+    final_results = {}
+    for i in range(24):
+        final_results[DISEASES[i]] = {
+            "risk_label": combined[i],
+            "source": ENGINE_NAME
+        }
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "panel1_height": int(panel1.shape[0]),
-        "panel2_height": int(panel2.shape[0]),
-        "panel1_detected_band_count": len(bands1),
-        "panel2_detected_band_count": len(bands2),
-        "panel1_bands": bands1,
-        "panel2_bands": bands2
+        "results": final_results
     })
 
 
