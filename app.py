@@ -5,23 +5,24 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v97_vertically_anchored_stripe_production_engine"
+ENGINE_NAME = "v98_horizontal_density_anchored_engine"
 API_KEY = "ithrive_secure_2026_key"
 
-PAGE_INDEX = 1  # Page 2
-ROW_COUNT = 24
+PAGE_INDEX = 1
 
-# ---- Vertical crop tuned to your PDF layout ----
-# Removes homeostasis and top white gap
-TOP_CROP_RATIO = 0.36
-BOTTOM_CROP_RATIO = 0.06
+# Vertical crop (removes Homeostasis)
+TOP_CROP_RATIO = 0.32
+BOTTOM_CROP_RATIO = 0.05
 
-# ---- Stripe detection thresholds ----
+# Stripe detection thresholds
 SAT_MASK_THRESHOLD = 40
 VAL_MASK_THRESHOLD = 40
+HORIZONTAL_DENSITY_THRESHOLD = 0.02
 COLUMN_DENSITY_THRESHOLD = 0.25
-MIN_STRIPE_WIDTH_RATIO = 0.10
-MAX_STRIPE_WIDTH_RATIO = 0.80
+MIN_STRIPE_WIDTH_RATIO = 0.08
+MAX_STRIPE_WIDTH_RATIO = 0.85
+
+EXPECTED_ROWS = 24
 
 DISEASES = [
     "adhd_children_learning",
@@ -107,37 +108,60 @@ def detect():
     # ---- Vertical crop ----
     top_crop = int(h_img * TOP_CROP_RATIO)
     bottom_crop = int(h_img * (1 - BOTTOM_CROP_RATIO))
-    disease_region = hsv[top_crop:bottom_crop, :]
+    region = hsv[top_crop:bottom_crop, :]
 
-    region_h = disease_region.shape[0]
-    row_height = region_h // ROW_COUNT
+    sat = region[:, :, 1]
+    val = region[:, :, 2]
+
+    colored_mask = (sat > SAT_MASK_THRESHOLD) & (val > VAL_MASK_THRESHOLD)
+
+    # ---- Horizontal density per row ----
+    horizontal_density = np.sum(colored_mask, axis=1) / region.shape[1]
+
+    candidate_rows = np.where(horizontal_density > HORIZONTAL_DENSITY_THRESHOLD)[0]
+
+    if len(candidate_rows) == 0:
+        return jsonify({"engine": ENGINE_NAME, "error": "No stripe rows detected"})
+
+    # Group contiguous Y indices
+    row_groups = np.split(candidate_rows,
+                          np.where(np.diff(candidate_rows) != 1)[0] + 1)
+
+    # Filter small noise bands
+    row_groups = [g for g in row_groups if len(g) > 5]
+
+    # Sort top → bottom
+    row_groups = sorted(row_groups, key=lambda g: g[0])
+
+    # Take strongest 24 bands
+    row_groups = row_groups[:EXPECTED_ROWS]
 
     results = {}
 
-    for i in range(ROW_COUNT):
+    for i in range(EXPECTED_ROWS):
 
-        y1 = i * row_height
-        y2 = (i + 1) * row_height
-
-        row = disease_region[y1:y2, :]
-
-        if row.size == 0:
+        if i >= len(row_groups):
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
             continue
 
-        sat = row[:, :, 1]
-        val = row[:, :, 2]
+        y_indices = row_groups[i]
+        row_band = region[y_indices[0]:y_indices[-1], :]
 
-        colored_mask = (sat > SAT_MASK_THRESHOLD) & (val > VAL_MASK_THRESHOLD)
+        sat_band = row_band[:, :, 1]
+        val_band = row_band[:, :, 2]
 
-        col_density = np.sum(colored_mask, axis=0) / row.shape[0]
+        colored_band = (sat_band > SAT_MASK_THRESHOLD) & (val_band > VAL_MASK_THRESHOLD)
+
+        col_density = np.sum(colored_band, axis=0) / row_band.shape[0]
         stripe_cols = np.where(col_density > COLUMN_DENSITY_THRESHOLD)[0]
 
         if len(stripe_cols) == 0:
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
             continue
 
-        groups = np.split(stripe_cols, np.where(np.diff(stripe_cols) != 1)[0] + 1)
+        groups = np.split(stripe_cols,
+                          np.where(np.diff(stripe_cols) != 1)[0] + 1)
+
         largest_group = max(groups, key=len)
 
         stripe_width_ratio = len(largest_group) / w_img
@@ -146,8 +170,7 @@ def detect():
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
             continue
 
-        stripe_region = row[:, largest_group]
-        stripe_pixels = stripe_region[colored_mask[:, largest_group]]
+        stripe_pixels = row_band[:, largest_group][colored_band[:, largest_group]]
 
         if len(stripe_pixels) < 50:
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
@@ -167,6 +190,7 @@ def detect():
     return jsonify({
         "engine": ENGINE_NAME,
         "page_index_processed": PAGE_INDEX,
+        "rows_detected": len(row_groups),
         "results": results
     })
 
