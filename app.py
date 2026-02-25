@@ -1,27 +1,11 @@
 from flask import Flask, request, jsonify
-import fitz
-import numpy as np
-import cv2
+import fitz  # PyMuPDF
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v98_horizontal_density_anchored_engine"
+ENGINE_NAME = "v100_vector_rectangle_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
-
-PAGE_INDEX = 1
-
-# Vertical crop (removes Homeostasis)
-TOP_CROP_RATIO = 0.32
-BOTTOM_CROP_RATIO = 0.05
-
-# Stripe detection thresholds
-SAT_MASK_THRESHOLD = 40
-VAL_MASK_THRESHOLD = 40
-HORIZONTAL_DENSITY_THRESHOLD = 0.02
-COLUMN_DENSITY_THRESHOLD = 0.25
-MIN_STRIPE_WIDTH_RATIO = 0.08
-MAX_STRIPE_WIDTH_RATIO = 0.85
-
+PAGE_INDEX = 1  # Page 2
 EXPECTED_ROWS = 24
 
 DISEASES = [
@@ -52,18 +36,25 @@ DISEASES = [
 ]
 
 
-def classify_color(h, s, v):
+def classify_rgb(r, g, b):
+    # Convert 0-1 floats to 0-255 scale if needed
+    if r <= 1 and g <= 1 and b <= 1:
+        r, g, b = int(r * 255), int(g * 255), int(b * 255)
 
-    if s < 20:
+    # Light grey / none
+    if abs(r - g) < 10 and abs(g - b) < 10:
         return "none"
 
-    if (0 <= h <= 25 or 170 <= h <= 179) and s > 150:
+    # Severe (red)
+    if r > 180 and g < 100:
         return "severe"
 
-    if 20 < h <= 40 and s > 100:
+    # Moderate (orange)
+    if r > 180 and 100 <= g <= 170:
         return "moderate"
 
-    if 40 < h <= 70 and s > 100:
+    # Mild (yellow)
+    if r > 180 and g > 170:
         return "mild"
 
     return "none"
@@ -94,93 +85,66 @@ def detect():
         return jsonify({"error": "Page 2 not found"}), 400
 
     page = doc[PAGE_INDEX]
-    pix = page.get_pixmap(dpi=200)
+    drawings = page.get_drawings()
 
-    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    bars = []
 
-    if pix.n == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    for d in drawings:
+        if d["type"] != "f":
+            continue  # only filled shapes
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        fill = d.get("fill")
+        rect = d.get("rect")
 
-    h_img, w_img = hsv.shape[:2]
+        if not fill or not rect:
+            continue
 
-    # ---- Vertical crop ----
-    top_crop = int(h_img * TOP_CROP_RATIO)
-    bottom_crop = int(h_img * (1 - BOTTOM_CROP_RATIO))
-    region = hsv[top_crop:bottom_crop, :]
+        width = rect.width
+        height = rect.height
 
-    sat = region[:, :, 1]
-    val = region[:, :, 2]
+        # Filter to horizontal stripe bars only
+        if width < 200:      # too narrow
+            continue
+        if height < 8 or height > 40:  # unrealistic row height
+            continue
 
-    colored_mask = (sat > SAT_MASK_THRESHOLD) & (val > VAL_MASK_THRESHOLD)
+        # Ignore black / borders
+        if fill == (0, 0, 0):
+            continue
 
-    # ---- Horizontal density per row ----
-    horizontal_density = np.sum(colored_mask, axis=1) / region.shape[1]
+        bars.append({
+            "y": rect.y0,
+            "fill": fill,
+            "rect": rect
+        })
 
-    candidate_rows = np.where(horizontal_density > HORIZONTAL_DENSITY_THRESHOLD)[0]
+    # Remove duplicates by Y proximity
+    bars = sorted(bars, key=lambda x: x["y"])
+    unique_bars = []
 
-    if len(candidate_rows) == 0:
-        return jsonify({"engine": ENGINE_NAME, "error": "No stripe rows detected"})
+    for b in bars:
+        if not unique_bars:
+            unique_bars.append(b)
+            continue
 
-    # Group contiguous Y indices
-    row_groups = np.split(candidate_rows,
-                          np.where(np.diff(candidate_rows) != 1)[0] + 1)
+        if abs(b["y"] - unique_bars[-1]["y"]) > 5:
+            unique_bars.append(b)
 
-    # Filter small noise bands
-    row_groups = [g for g in row_groups if len(g) > 5]
+    if len(unique_bars) < EXPECTED_ROWS:
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "error": f"Detected {len(unique_bars)} bars, expected {EXPECTED_ROWS}"
+        })
 
-    # Sort top → bottom
-    row_groups = sorted(row_groups, key=lambda g: g[0])
-
-    # Take strongest 24 bands
-    row_groups = row_groups[:EXPECTED_ROWS]
+    unique_bars = unique_bars[:EXPECTED_ROWS]
 
     results = {}
 
     for i in range(EXPECTED_ROWS):
+        fill = unique_bars[i]["fill"]
+        r, g, b = fill
 
-        if i >= len(row_groups):
-            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
-            continue
-
-        y_indices = row_groups[i]
-        row_band = region[y_indices[0]:y_indices[-1], :]
-
-        sat_band = row_band[:, :, 1]
-        val_band = row_band[:, :, 2]
-
-        colored_band = (sat_band > SAT_MASK_THRESHOLD) & (val_band > VAL_MASK_THRESHOLD)
-
-        col_density = np.sum(colored_band, axis=0) / row_band.shape[0]
-        stripe_cols = np.where(col_density > COLUMN_DENSITY_THRESHOLD)[0]
-
-        if len(stripe_cols) == 0:
-            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
-            continue
-
-        groups = np.split(stripe_cols,
-                          np.where(np.diff(stripe_cols) != 1)[0] + 1)
-
-        largest_group = max(groups, key=len)
-
-        stripe_width_ratio = len(largest_group) / w_img
-
-        if not (MIN_STRIPE_WIDTH_RATIO <= stripe_width_ratio <= MAX_STRIPE_WIDTH_RATIO):
-            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
-            continue
-
-        stripe_pixels = row_band[:, largest_group][colored_band[:, largest_group]]
-
-        if len(stripe_pixels) < 50:
-            results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
-            continue
-
-        avg_h = float(np.mean(stripe_pixels[:, 0]))
-        avg_s = float(np.mean(stripe_pixels[:, 1]))
-        avg_v = float(np.mean(stripe_pixels[:, 2]))
-
-        severity = classify_color(avg_h, avg_s, avg_v)
+        severity = classify_rgb(r, g, b)
 
         results[DISEASES[i]] = {
             "risk_label": severity,
@@ -190,7 +154,7 @@ def detect():
     return jsonify({
         "engine": ENGINE_NAME,
         "page_index_processed": PAGE_INDEX,
-        "rows_detected": len(row_groups),
+        "bars_detected": len(unique_bars),
         "results": results
     })
 
