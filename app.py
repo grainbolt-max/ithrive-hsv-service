@@ -5,7 +5,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v89_row_aligned_stripe_engine"
+ENGINE_NAME = "v90_geometry_anchored_row_engine"
 API_KEY = "ithrive_secure_2026_key"
 
 TARGET_PAGE_INDEX = 1
@@ -16,11 +16,11 @@ LEFT_SCAN_RATIO = 0.65
 SAT_THRESHOLD = 150
 VAL_THRESHOLD = 60
 
-MIN_BAND_HEIGHT = 8
-MAX_VERTICAL_GAP = 4
-
 MIN_WIDTH_RATIO = 0.15
 MAX_WIDTH_RATIO = 0.80
+
+ROW_SEPARATOR_DENSITY = 0.60
+MIN_SEPARATOR_HEIGHT = 2
 
 DISEASE_KEYS = [
     "large_artery_stiffness",
@@ -78,85 +78,80 @@ def detect():
     disease_region = page_img[top_crop:bottom_crop, :]
 
     region_h, region_w, _ = disease_region.shape
-    scan_width = int(region_w * LEFT_SCAN_RATIO)
-    scan_region = disease_region[:, :scan_width]
 
-    hsv = cv2.cvtColor(scan_region, cv2.COLOR_BGR2HSV)
-    sat = hsv[:, :, 1]
-    val = hsv[:, :, 2]
+    # --- STEP 1: Detect horizontal separators (black lines) ---
 
-    colored_mask = (sat > SAT_THRESHOLD) & (val > VAL_THRESHOLD)
+    gray = cv2.cvtColor(disease_region, cv2.COLOR_BGR2GRAY)
+    dark_mask = gray < 40  # black line detection
 
-    # Collapse vertically to detect horizontal colored rows
-    row_density = np.sum(colored_mask, axis=1) / scan_width
+    row_dark_density = np.sum(dark_mask, axis=1) / region_w
 
-    bands = []
-    band_start = None
-    gap = 0
+    separators = []
+    in_sep = False
+    start = 0
 
     for y in range(region_h):
-        if row_density[y] > 0.02:
-            if band_start is None:
-                band_start = y
-            gap = 0
+        if row_dark_density[y] > ROW_SEPARATOR_DENSITY:
+            if not in_sep:
+                in_sep = True
+                start = y
         else:
-            if band_start is not None:
-                gap += 1
-                if gap > MAX_VERTICAL_GAP:
-                    band_end = y - gap
-                    if band_end - band_start >= MIN_BAND_HEIGHT:
-                        bands.append((band_start, band_end))
-                    band_start = None
-                    gap = 0
+            if in_sep:
+                end = y
+                if end - start >= MIN_SEPARATOR_HEIGHT:
+                    separators.append((start, end))
+                in_sep = False
 
-    # Close final band
-    if band_start is not None:
-        band_end = region_h - 1
-        if band_end - band_start >= MIN_BAND_HEIGHT:
-            bands.append((band_start, band_end))
+    # Derive row boundaries from separators
+    row_bounds = []
 
-    if len(bands) != 24:
+    for i in range(len(separators) - 1):
+        top = separators[i][1]
+        bottom = separators[i + 1][0]
+        row_bounds.append((top, bottom))
+
+    if len(row_bounds) != 24:
         return jsonify({
             "engine": ENGINE_NAME,
-            "error": f"Expected 24 stripe bands, detected {len(bands)}"
+            "error": f"Expected 24 rows, detected {len(row_bounds)}"
         })
 
     results = {}
 
-    for i, (y1, y2) in enumerate(bands):
+    scan_width = int(region_w * LEFT_SCAN_RATIO)
 
-        band = scan_region[y1:y2, :]
+    # --- STEP 2: Stripe classification inside each anchored row ---
 
-        hsv_band = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-        sat_band = hsv_band[:, :, 1]
-        val_band = hsv_band[:, :, 2]
+    for i, (y1, y2) in enumerate(row_bounds):
 
-        band_mask = (sat_band > SAT_THRESHOLD) & (val_band > VAL_THRESHOLD)
+        row_img = disease_region[y1:y2, :scan_width]
+        hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
 
-        col_density = np.sum(band_mask, axis=0) / band_mask.shape[0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
 
+        colored_mask = (sat > SAT_THRESHOLD) & (val > VAL_THRESHOLD)
+
+        col_density = np.sum(colored_mask, axis=0) / row_img.shape[0]
         stripe_cols = np.where(col_density > 0.20)[0]
 
-        if len(stripe_cols) == 0:
-            stripe_width_ratio = 0.0
-        else:
-            stripe_width_ratio = (stripe_cols[-1] - stripe_cols[0]) / scan_width
-
+        stripe_width_ratio = 0.0
         severity = "none"
 
-        if stripe_width_ratio >= MIN_WIDTH_RATIO and stripe_width_ratio <= MAX_WIDTH_RATIO:
-            valid = band_mask > 0
-            if np.sum(valid) > 0:
-                avg_h = float(np.mean(hsv_band[:, :, 0][valid]))
+        if len(stripe_cols) > 0:
+            stripe_width_ratio = (stripe_cols[-1] - stripe_cols[0]) / scan_width
 
-                if 0 <= avg_h <= 10:
-                    severity = "severe"
-                elif 10 < avg_h <= 22:
-                    severity = "moderate"
-                elif 22 < avg_h <= 40:
-                    severity = "mild"
-                else:
-                    severity = "none"
+            if MIN_WIDTH_RATIO <= stripe_width_ratio <= MAX_WIDTH_RATIO:
+                valid = colored_mask > 0
+                if np.sum(valid) > 0:
+                    avg_h = float(np.mean(hsv[:, :, 0][valid]))
+
+                    if 0 <= avg_h <= 10:
+                        severity = "severe"
+                    elif 10 < avg_h <= 22:
+                        severity = "moderate"
+                    elif 22 < avg_h <= 40:
+                        severity = "mild"
 
         results[DISEASE_KEYS[i]] = {
             "risk_label": severity,
