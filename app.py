@@ -5,7 +5,7 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v101_image_extracted_locked_production_classifier"
+ENGINE_NAME = "v102_image_extracted_color_isolated_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 PAGE_INDEX = 1  # Page 2 (0-based)
 ROWS_PER_PANEL = 12
@@ -39,21 +39,15 @@ DISEASES = [
 
 
 def classify_hsv(h, s, v):
-    # HSV thresholds calibrated to your legend
-
-    # light grey (none/low)
-    if s < 30 and v > 150:
-        return "none"
-
-    # red (severe)
+    # severe (red)
     if (h < 10 or h > 170) and s > 120:
         return "severe"
 
-    # orange (moderate)
+    # moderate (orange)
     if 10 <= h <= 25 and s > 120:
         return "moderate"
 
-    # yellow (mild)
+    # mild (yellow)
     if 25 < h <= 40 and s > 100:
         return "mild"
 
@@ -83,10 +77,19 @@ def classify_panel(img):
         y1 = i * row_height
         y2 = (i + 1) * row_height
 
-        band = img[y1:y2, int(w * 0.2):int(w * 0.8)]  # center 60%
+        band = img[y1:y2, int(w * 0.2):int(w * 0.8)]
 
         hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-        avg = hsv.mean(axis=(0, 1))
+
+        # Mask only saturated pixels (ignore white/grey)
+        mask = hsv[:, :, 1] > 80  # saturation threshold
+
+        if np.count_nonzero(mask) < 50:
+            results.append("none")
+            continue
+
+        colored_pixels = hsv[mask]
+        avg = colored_pixels.mean(axis=0)
         h_val, s_val, v_val = avg
 
         severity = classify_hsv(h_val, s_val, v_val)
@@ -116,10 +119,6 @@ def detect():
         return jsonify({"error": "Page 2 not found"}), 400
 
     page = doc[PAGE_INDEX]
-
-    # Image 1 = Homeostasis
-    # Image 2 = Disease rows 1–12
-    # Image 3 = Disease rows 13–24
 
     panel1 = extract_image_by_index(page, 1)
     panel2 = extract_image_by_index(page, 2)
