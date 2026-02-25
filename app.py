@@ -5,7 +5,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v86_final_production_classifier"
+ENGINE_NAME = "v87_hue_locked_final_classifier"
 API_KEY = "ithrive_secure_2026_key"
 
 TARGET_PAGE_INDEX = 1
@@ -126,28 +126,22 @@ def detect():
             severity = "none"
 
         else:
-            if stripe_active and stripe_end_col > 0:
-                stripe_pixels = colored_mask[:, :stripe_end_col]
-                stripe_hsv = hsv[:, :stripe_end_col]
-                valid = stripe_pixels > 0
+            stripe_pixels = colored_mask[:, :stripe_end_col]
+            stripe_hsv = hsv[:, :stripe_end_col]
+            valid = stripe_pixels > 0
 
-                if np.sum(valid) > 0:
-                    avg_h = float(np.mean(stripe_hsv[:, :, 0][valid]))
-                    avg_s = float(np.mean(stripe_hsv[:, :, 1][valid]))
+            if np.sum(valid) > 0:
+                avg_h = float(np.mean(stripe_hsv[:, :, 0][valid]))
 
-                    if avg_s > 200:
-                        if 0 <= avg_h <= 10:
-                            severity = "severe"
-                        elif 10 < avg_h <= 25:
-                            severity = "moderate"
-                        elif 25 < avg_h <= 40:
-                            severity = "mild"
-                        else:
-                            severity = "mild"
-                    else:
-                        severity = "mild"
-                else:
+                # 🔒 Hue-based classification
+                if 0 <= avg_h <= 10:
+                    severity = "severe"
+                elif 10 < avg_h <= 22:
+                    severity = "moderate"
+                elif 22 < avg_h <= 40:
                     severity = "mild"
+                else:
+                    severity = "none"
             else:
                 severity = "none"
 
