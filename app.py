@@ -10,12 +10,24 @@ ENGINE_NAME = "vMeasureRows"
 API_KEY = "ithrive_secure_2026_key"
 
 
+# ============================================================
+# PDF IMAGE EXTRACTION
+# ============================================================
+
 def extract_panel_images(pdf_bytes):
+    """
+    Extract disease panel images from page 2.
+    Assumes:
+        image 0 = homeostasis
+        image 1 = disease rows 1–12
+        image 2 = disease rows 13–24
+    """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # Page 2 (index 1)
-    page = doc[1]
+    if len(doc) < 2:
+        raise Exception("PDF must contain at least 2 pages")
 
+    page = doc[1]  # Page 2 (index 1)
     image_list = page.get_images(full=True)
 
     if len(image_list) < 3:
@@ -23,9 +35,6 @@ def extract_panel_images(pdf_bytes):
 
     panels = []
 
-    # image 0 = homeostasis
-    # image 1 = disease panel 1
-    # image 2 = disease panel 2
     for img_index in [1, 2]:
         xref = image_list[img_index][0]
         base_image = doc.extract_image(xref)
@@ -34,38 +43,65 @@ def extract_panel_images(pdf_bytes):
         img_array = np.frombuffer(image_bytes, dtype=np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
+        if img is None:
+            raise Exception("Failed to decode panel image")
+
         panels.append(img)
 
     return panels
 
 
+# ============================================================
+# ROW MEASUREMENT ENGINE
+# ============================================================
+
 def measure_row_spacing(panel_img):
+    """
+    Detect horizontal divider lines using Sobel-Y
+    and compute row spacing statistics.
+    """
+
+    panel_height = panel_img.shape[0]
+
     gray = cv2.cvtColor(panel_img, cv2.COLOR_BGR2GRAY)
 
+    # Detect horizontal edges
     sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     sobel_y = np.absolute(sobel_y)
     sobel_y = np.uint8(sobel_y)
 
+    # Sum edge energy per row
     row_energy = np.sum(sobel_y, axis=1)
 
     if np.max(row_energy) == 0:
         return {
-            "panel_height": int(panel_img.shape[0]),
+            "panel_height": int(panel_height),
             "detected_divider_count": 0,
+            "min_row_height": None,
+            "max_row_height": None,
+            "mean_row_height": None,
+            "std_dev_row_height": None,
             "all_row_heights": []
         }
 
+    # Normalize
     row_energy = row_energy / np.max(row_energy)
 
+    # Divider threshold (edge strength)
     divider_indices = np.where(row_energy > 0.4)[0]
 
     if len(divider_indices) == 0:
         return {
-            "panel_height": int(panel_img.shape[0]),
+            "panel_height": int(panel_height),
             "detected_divider_count": 0,
+            "min_row_height": None,
+            "max_row_height": None,
+            "mean_row_height": None,
+            "std_dev_row_height": None,
             "all_row_heights": []
         }
 
+    # Group contiguous indices into single divider lines
     lines = []
     current_group = [divider_indices[0]]
 
@@ -78,18 +114,34 @@ def measure_row_spacing(panel_img):
 
     lines.append(int(np.mean(current_group)))
 
+    if len(lines) < 2:
+        return {
+            "panel_height": int(panel_height),
+            "detected_divider_count": len(lines),
+            "min_row_height": None,
+            "max_row_height": None,
+            "mean_row_height": None,
+            "std_dev_row_height": None,
+            "all_row_heights": []
+        }
+
+    # Compute distances between divider lines
     distances = np.diff(lines)
 
     return {
-        "panel_height": int(panel_img.shape[0]),
-        "detected_divider_count": len(lines),
-        "min_row_height": int(np.min(distances)) if len(distances) > 0 else None,
-        "max_row_height": int(np.max(distances)) if len(distances) > 0 else None,
-        "mean_row_height": float(np.mean(distances)) if len(distances) > 0 else None,
-        "std_dev_row_height": float(np.std(distances)) if len(distances) > 0 else None,
-        "all_row_heights": distances.tolist() if len(distances) > 0 else []
+        "panel_height": int(panel_height),
+        "detected_divider_count": int(len(lines)),
+        "min_row_height": int(np.min(distances)),
+        "max_row_height": int(np.max(distances)),
+        "mean_row_height": float(np.mean(distances)),
+        "std_dev_row_height": float(np.std(distances)),
+        "all_row_heights": distances.tolist()
     }
 
+
+# ============================================================
+# ROUTES
+# ============================================================
 
 @app.route("/", methods=["GET"])
 def home():
@@ -98,6 +150,7 @@ def home():
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def measure_rows():
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
@@ -107,16 +160,28 @@ def measure_rows():
 
     pdf_bytes = request.files["file"].read()
 
-    panels = extract_panel_images(pdf_bytes)
+    try:
+        panels = extract_panel_images(pdf_bytes)
 
-    results = {
-        "engine": ENGINE_NAME,
-        "panel_1_measurements": measure_row_spacing(panels[0]),
-        "panel_2_measurements": measure_row_spacing(panels[1])
-    }
+        panel1_stats = measure_row_spacing(panels[0])
+        panel2_stats = measure_row_spacing(panels[1])
 
-    return jsonify(results)
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "panel_1_measurements": panel1_stats,
+            "panel_2_measurements": panel2_stats
+        })
 
+    except Exception as e:
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "error": str(e)
+        }), 500
+
+
+# ============================================================
+# SERVER ENTRY
+# ============================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
