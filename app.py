@@ -3,12 +3,10 @@ import fitz  # PyMuPDF
 import numpy as np
 import cv2
 import os
-import io
 
 app = Flask(__name__)
 
 ENGINE_NAME = "vMeasureRows"
-
 API_KEY = "ithrive_secure_2026_key"
 
 
@@ -20,16 +18,14 @@ def extract_panel_images(pdf_bytes):
 
     image_list = page.get_images(full=True)
 
-    # Expect 3 images:
-    # 0 = homeostasis
-    # 1 = disease panel 1
-    # 2 = disease panel 2
-
     if len(image_list) < 3:
         raise Exception("Expected at least 3 images on page 2")
 
     panels = []
 
+    # image 0 = homeostasis
+    # image 1 = disease panel 1
+    # image 2 = disease panel 2
     for img_index in [1, 2]:
         xref = image_list[img_index][0]
         base_image = doc.extract_image(xref)
@@ -46,21 +42,30 @@ def extract_panel_images(pdf_bytes):
 def measure_row_spacing(panel_img):
     gray = cv2.cvtColor(panel_img, cv2.COLOR_BGR2GRAY)
 
-    # Detect horizontal edges
     sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     sobel_y = np.absolute(sobel_y)
     sobel_y = np.uint8(sobel_y)
 
-    # Sum edge strength per row
     row_energy = np.sum(sobel_y, axis=1)
 
-    # Normalize
+    if np.max(row_energy) == 0:
+        return {
+            "panel_height": int(panel_img.shape[0]),
+            "detected_divider_count": 0,
+            "all_row_heights": []
+        }
+
     row_energy = row_energy / np.max(row_energy)
 
-    # Divider lines = strong horizontal edges
     divider_indices = np.where(row_energy > 0.4)[0]
 
-    # Group contiguous indices into lines
+    if len(divider_indices) == 0:
+        return {
+            "panel_height": int(panel_img.shape[0]),
+            "detected_divider_count": 0,
+            "all_row_heights": []
+        }
+
     lines = []
     current_group = [divider_indices[0]]
 
@@ -73,7 +78,6 @@ def measure_row_spacing(panel_img):
 
     lines.append(int(np.mean(current_group)))
 
-    # Compute distances between divider lines
     distances = np.diff(lines)
 
     return {
@@ -101,8 +105,7 @@ def measure_rows():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    file = request.files["file"]
-    pdf_bytes = file.read()
+    pdf_bytes = request.files["file"].read()
 
     panels = extract_panel_images(pdf_bytes)
 
