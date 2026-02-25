@@ -1,15 +1,14 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
+import fitz
 import numpy as np
 import cv2
-import io
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v94_calibrated_hsv_band_production_classifier"
+ENGINE_NAME = "v95_widened_center_band_production_classifier"
 API_KEY = "ithrive_secure_2026_key"
 
-# === Disease Order (24 rows, top → bottom) ===
+# === Disease Order (Top → Bottom, Page 2) ===
 DISEASES = [
     "adhd_children_learning",
     "atherosclerosis",
@@ -37,28 +36,25 @@ DISEASES = [
     "tissue_inflammatory_process"
 ]
 
-# === Strict center band for disease area only ===
-CENTER_X_START_RATIO = 0.32
-CENTER_X_END_RATIO   = 0.68
-
 ROW_COUNT = 24
+
+# 🔧 Widened stripe capture window (adjusted from v94)
+CENTER_X_START_RATIO = 0.25
+CENTER_X_END_RATIO   = 0.75
 
 
 def classify_color(h, s, v):
-    """
-    Calibrated HSV bands based on actual PDF measurements.
-    """
 
-    # Light Grey / None
+    # Light Grey → None
     if s < 20:
         return "none"
 
     # Severe (Red)
-    if (0 <= h <= 25) and (s > 180) and (50 <= v <= 220):
+    if (0 <= h <= 25) and (s > 180) and (50 <= v <= 230):
         return "severe"
 
     # Moderate (Orange)
-    if (20 < h <= 40) and (s > 100) and (60 <= v <= 220):
+    if (20 < h <= 40) and (s > 100) and (60 <= v <= 230):
         return "moderate"
 
     # Mild (Yellow)
@@ -90,14 +86,13 @@ def detect_disease_bars():
     except:
         return jsonify({"error": "Invalid PDF"}), 400
 
-    # Page 2 contains all 24 disease rows
-    page_index = 1
+    page_index = 1  # Page 2
     if len(doc) <= page_index:
         return jsonify({"error": "Page 2 not found"}), 400
 
     page = doc[page_index]
-
     pix = page.get_pixmap(dpi=200)
+
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
 
     if pix.n == 4:
@@ -128,7 +123,7 @@ def detect_disease_bars():
             }
             continue
 
-        # Only count colored pixels (avoid white)
+        # Filter out white/near-white
         mask = row_slice[:, :, 1] > 20
         colored_pixels = row_slice[mask]
 
