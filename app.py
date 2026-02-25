@@ -5,47 +5,9 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v103_image_extracted_auto_band_detection_classifier"
+ENGINE_NAME = "v104_band_diagnostic_engine"
 API_KEY = "ithrive_secure_2026_key"
 PAGE_INDEX = 1
-EXPECTED_ROWS = 12
-
-DISEASES = [
-    "adhd_children_learning",
-    "atherosclerosis",
-    "beta_cell_function_decreased",
-    "blood_glucose_uncontrolled",
-    "blood_pressure_uncontrolled",
-    "cerebral_dopamine_serotonin",
-    "chronic_hepatitis",
-    "diabetes",
-    "digestive_disorders",
-    "hepatic_fibrosis",
-    "hyperthyroidism",
-    "hypothyroidism",
-    "insulin_resistance",
-    "kidney_function_disorders",
-    "large_artery_stiffness",
-    "ldl_cholesterol",
-    "lv_hypertrophy",
-    "major_depression",
-    "metabolic_syndrome",
-    "peripheral_vessel",
-    "prostate_cancer",
-    "respiratory_disorders",
-    "small_medium_artery_stiffness",
-    "tissue_inflammatory_process"
-]
-
-
-def classify_hsv(h, s, v):
-    if (h < 10 or h > 170) and s > 120:
-        return "severe"
-    if 10 <= h <= 25 and s > 120:
-        return "moderate"
-    if 25 < h <= 40 and s > 100:
-        return "mild"
-    return "none"
 
 
 def extract_image_by_index(page, image_index):
@@ -68,7 +30,6 @@ def detect_horizontal_bands(img):
     # saturation mask
     sat_mask = hsv[:, :, 1] > 80
 
-    # horizontal projection
     row_sums = sat_mask.sum(axis=1)
 
     bands = []
@@ -82,45 +43,14 @@ def detect_horizontal_bands(img):
         elif val <= 50 and in_band:
             in_band = False
             end = i
-            if end - start > 5:
-                bands.append((start, end))
+            if end - start > 3:
+                bands.append({
+                    "start_y": int(start),
+                    "end_y": int(end),
+                    "height": int(end - start)
+                })
 
-    # sort by height (largest bands)
-    bands = sorted(bands, key=lambda x: x[1] - x[0], reverse=True)
-
-    return bands[:EXPECTED_ROWS]
-
-
-def classify_panel(img):
-    h, w, _ = img.shape
-    bands = detect_horizontal_bands(img)
-
-    # sort top to bottom
-    bands = sorted(bands, key=lambda x: x[0])
-
-    results = []
-
-    for (y1, y2) in bands:
-        band = img[y1:y2, int(w * 0.2):int(w * 0.8)]
-        hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-
-        mask = hsv[:, :, 1] > 80
-        if np.count_nonzero(mask) < 50:
-            results.append("none")
-            continue
-
-        colored_pixels = hsv[mask]
-        avg = colored_pixels.mean(axis=0)
-        h_val, s_val, v_val = avg
-
-        severity = classify_hsv(h_val, s_val, v_val)
-        results.append(severity)
-
-    # pad if fewer detected
-    while len(results) < EXPECTED_ROWS:
-        results.append("none")
-
-    return results
+    return bands
 
 
 @app.route("/")
@@ -129,7 +59,7 @@ def home():
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect():
+def inspect():
 
     if request.headers.get("Authorization") != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
@@ -151,22 +81,17 @@ def detect():
     if panel1 is None or panel2 is None:
         return jsonify({"error": "Disease panels not found"}), 400
 
-    results1 = classify_panel(panel1)
-    results2 = classify_panel(panel2)
-
-    combined = results1 + results2
-
-    final_results = {}
-    for i in range(24):
-        final_results[DISEASES[i]] = {
-            "risk_label": combined[i],
-            "source": ENGINE_NAME
-        }
+    bands1 = detect_horizontal_bands(panel1)
+    bands2 = detect_horizontal_bands(panel2)
 
     return jsonify({
         "engine": ENGINE_NAME,
-        "page_index_processed": PAGE_INDEX,
-        "results": final_results
+        "panel1_height": int(panel1.shape[0]),
+        "panel2_height": int(panel2.shape[0]),
+        "panel1_detected_band_count": len(bands1),
+        "panel2_detected_band_count": len(bands2),
+        "panel1_bands": bands1,
+        "panel2_bands": bands2
     })
 
 
