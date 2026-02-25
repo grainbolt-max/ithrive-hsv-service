@@ -5,20 +5,24 @@ import cv2
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v96_stripe_isolated_calibrated_production_classifier"
+ENGINE_NAME = "v97_vertically_anchored_stripe_production_engine"
 API_KEY = "ithrive_secure_2026_key"
 
-ROW_COUNT = 24
 PAGE_INDEX = 1  # Page 2
+ROW_COUNT = 24
 
-# Stripe extraction thresholds
+# ---- Vertical crop tuned to your PDF layout ----
+# Removes homeostasis and top white gap
+TOP_CROP_RATIO = 0.36
+BOTTOM_CROP_RATIO = 0.06
+
+# ---- Stripe detection thresholds ----
 SAT_MASK_THRESHOLD = 40
 VAL_MASK_THRESHOLD = 40
 COLUMN_DENSITY_THRESHOLD = 0.25
 MIN_STRIPE_WIDTH_RATIO = 0.10
 MAX_STRIPE_WIDTH_RATIO = 0.80
 
-# Disease order (top → bottom)
 DISEASES = [
     "adhd_children_learning",
     "atherosclerosis",
@@ -49,19 +53,15 @@ DISEASES = [
 
 def classify_color(h, s, v):
 
-    # Light grey / none
     if s < 20:
         return "none"
 
-    # Severe (Red)
     if (0 <= h <= 25 or 170 <= h <= 179) and s > 150:
         return "severe"
 
-    # Moderate (Orange)
     if 20 < h <= 40 and s > 100:
         return "moderate"
 
-    # Mild (Yellow)
     if 40 < h <= 70 and s > 100:
         return "mild"
 
@@ -103,7 +103,14 @@ def detect():
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     h_img, w_img = hsv.shape[:2]
-    row_height = h_img // ROW_COUNT
+
+    # ---- Vertical crop ----
+    top_crop = int(h_img * TOP_CROP_RATIO)
+    bottom_crop = int(h_img * (1 - BOTTOM_CROP_RATIO))
+    disease_region = hsv[top_crop:bottom_crop, :]
+
+    region_h = disease_region.shape[0]
+    row_height = region_h // ROW_COUNT
 
     results = {}
 
@@ -112,7 +119,7 @@ def detect():
         y1 = i * row_height
         y2 = (i + 1) * row_height
 
-        row = hsv[y1:y2, :]
+        row = disease_region[y1:y2, :]
 
         if row.size == 0:
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
@@ -130,7 +137,6 @@ def detect():
             results[DISEASES[i]] = {"risk_label": "none", "source": ENGINE_NAME}
             continue
 
-        # Identify largest contiguous block
         groups = np.split(stripe_cols, np.where(np.diff(stripe_cols) != 1)[0] + 1)
         largest_group = max(groups, key=len)
 
@@ -141,7 +147,6 @@ def detect():
             continue
 
         stripe_region = row[:, largest_group]
-
         stripe_pixels = stripe_region[colored_mask[:, largest_group]]
 
         if len(stripe_pixels) < 50:
