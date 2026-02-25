@@ -5,7 +5,7 @@ from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
 
-ENGINE_NAME = "v92_calibrated_production_classifier"
+ENGINE_NAME = "v93_final_production_lock"
 API_KEY = "ithrive_secure_2026_key"
 
 TARGET_PAGE_INDEX = 1
@@ -14,7 +14,7 @@ BOTTOM_CROP_RATIO = 0.06
 ROW_COUNT = 24
 LEFT_SCAN_RATIO = 0.65
 
-# Stripe detection
+# Stripe detection thresholds
 SAT_THRESHOLD = 100
 VAL_THRESHOLD = 60
 COLUMN_DENSITY_THRESHOLD = 0.20
@@ -23,7 +23,7 @@ COLUMN_DENSITY_THRESHOLD = 0.20
 MIN_WIDTH_RATIO = 0.15
 MAX_WIDTH_RATIO = 0.80
 
-# Center-band lock
+# Center-band lock (prevents vertical bleed)
 CENTER_TOP_RATIO = 0.30
 CENTER_BOTTOM_RATIO = 0.70
 
@@ -73,6 +73,9 @@ def detect():
     pdf_bytes = request.files["file"].read()
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
+    if TARGET_PAGE_INDEX >= len(pages):
+        return jsonify({"error": "Target page not found"}), 400
+
     page = pages[TARGET_PAGE_INDEX]
     page_img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
@@ -92,6 +95,7 @@ def detect():
 
         y1 = i * row_height
 
+        # 🔒 Center band isolation
         center_top = int(y1 + row_height * CENTER_TOP_RATIO)
         center_bottom = int(y1 + row_height * CENTER_BOTTOM_RATIO)
 
@@ -119,12 +123,10 @@ def detect():
 
                     avg_h = float(np.mean(hsv[:, :, 0][valid]))
                     avg_s = float(np.mean(hsv[:, :, 1][valid]))
-                    avg_v = float(np.mean(hsv[:, :, 2][valid]))
 
-                    # 🔒 Grey rejection guard
-                    if avg_s < 80 or avg_v > 210:
+                    # 🔒 Grey rejection: saturation only
+                    if avg_s < 80:
                         severity = "none"
-
                     else:
                         # 🔒 Red wraparound detection
                         if (0 <= avg_h <= 10) or (170 <= avg_h <= 179):
