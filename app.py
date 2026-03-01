@@ -65,12 +65,10 @@ def measure_row_spacing(panel_img):
 
     gray = cv2.cvtColor(panel_img, cv2.COLOR_BGR2GRAY)
 
-    # Detect horizontal edges
     sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     sobel_y = np.absolute(sobel_y)
     sobel_y = np.uint8(sobel_y)
 
-    # Sum edge energy per row
     row_energy = np.sum(sobel_y, axis=1)
 
     if np.max(row_energy) == 0:
@@ -84,10 +82,8 @@ def measure_row_spacing(panel_img):
             "all_row_heights": []
         }
 
-    # Normalize
     row_energy = row_energy / np.max(row_energy)
 
-    # Divider threshold (edge strength)
     divider_indices = np.where(row_energy > 0.4)[0]
 
     if len(divider_indices) == 0:
@@ -101,7 +97,6 @@ def measure_row_spacing(panel_img):
             "all_row_heights": []
         }
 
-    # Group contiguous indices into single divider lines
     lines = []
     current_group = [divider_indices[0]]
 
@@ -125,7 +120,6 @@ def measure_row_spacing(panel_img):
             "all_row_heights": []
         }
 
-    # Compute distances between divider lines
     distances = np.diff(lines)
 
     return {
@@ -146,6 +140,12 @@ def measure_row_spacing(panel_img):
 @app.route("/", methods=["GET"])
 def home():
     return f"{ENGINE_NAME} running"
+
+
+# ✅ HEALTH ROUTE (ADDED — REQUIRED FOR DEPLOY VALIDATION)
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
