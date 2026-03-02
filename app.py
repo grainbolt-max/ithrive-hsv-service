@@ -5,13 +5,8 @@ from pdf2image import convert_from_bytes
 import os
 import gc
 
-# ============================================================
-# ITHRIVE HSV PRODUCTION ENGINE
-# RGB SAFE — HARD LOCKED COORDINATES
-# ============================================================
-
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "3.1.0_rgb_fixed"
+ENGINE_VERSION = "3.2.0_stable_return_fix"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -20,21 +15,10 @@ if not API_KEY:
 app = Flask(__name__)
 
 RENDER_DPI = 150
-
-# ============================================================
-# VERIFIED X WINDOW
-# ============================================================
-
 X_LEFT = 704
 X_RIGHT = 710
 
-# ============================================================
-# VERIFIED Y COORDINATES (150 DPI)
-# ============================================================
-
 DISEASE_COORDINATES = {
-
-    # PANEL 1
     "large_artery_stiffness": (689, 709),
     "peripheral_vessel": (714, 734),
     "blood_pressure_uncontrolled": (739, 759),
@@ -47,8 +31,6 @@ DISEASE_COORDINATES = {
     "beta_cell_function_decreased": (924, 944),
     "blood_glucose_uncontrolled": (949, 969),
     "tissue_inflammatory_process": (974, 994),
-
-    # PANEL 2
     "hypothyroidism": (1145, 1165),
     "hyperthyroidism": (1170, 1190),
     "hepatic_fibrosis": (1195, 1215),
@@ -63,13 +45,7 @@ DISEASE_COORDINATES = {
     "cerebral_serotonin_decreased": (1425, 1445),
 }
 
-# ============================================================
-# HSV CLASSIFICATION (RGB SAFE)
-# ============================================================
-
 def classify_risk(roi):
-
-    # pdf2image returns RGB arrays
     hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
     total_pixels = hsv.shape[0] * hsv.shape[1]
 
@@ -101,36 +77,26 @@ def classify_risk(roi):
 
     return "None/Low"
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "healthy",
         "engine": ENGINE_NAME,
         "version": ENGINE_VERSION,
-        "dpi": RENDER_DPI,
-        "x_window": [X_LEFT, X_RIGHT]
+        "dpi": RENDER_DPI
     })
-
-# ============================================================
-# DETECTION ENDPOINT
-# ============================================================
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
-
-    if request.headers.get("Authorization", "") != f"Bearer {API_KEY}":
-        return jsonify({"error": "Unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    pdf_bytes = request.files["file"].read()
-
     try:
+        if request.headers.get("Authorization", "") != f"Bearer {API_KEY}":
+            return jsonify({"error": "Unauthorized"}), 401
+
+        if "file" not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+
+        pdf_bytes = request.files["file"].read()
+
         pages = convert_from_bytes(
             pdf_bytes,
             dpi=RENDER_DPI,
@@ -145,34 +111,30 @@ def detect():
         del pages
         gc.collect()
 
+        results = {}
+
+        for disease, (y1, y2) in DISEASE_COORDINATES.items():
+            roi = page_image[y1:y2, X_LEFT:X_RIGHT]
+
+            if roi.size == 0:
+                results[disease] = "None/Low"
+            else:
+                results[disease] = classify_risk(roi)
+
+        del page_image
+        gc.collect()
+
+        return jsonify({
+            "engine": ENGINE_NAME,
+            "version": ENGINE_VERSION,
+            "results": results
+        })
+
     except Exception as e:
-        return jsonify({"error": "PDF processing failed", "details": str(e)}), 500
-
-    results = {}
-
-    for disease, (y1, y2) in DISEASE_COORDINATES.items():
-
-        roi = page_image[y1:y2, X_LEFT:X_RIGHT]
-
-        if roi.size == 0:
-            results[disease] = "None/Low"
-            continue
-
-        severity = classify_risk(roi)
-        results[disease] = severity
-
-    del page_image
-    gc.collect()
-
-    return jsonify({
-        "engine": ENGINE_NAME,
-        "version": ENGINE_VERSION,
-        "results": results
-    })
-
-# ============================================================
-# LOCAL ENTRY POINT
-# ============================================================
+        return jsonify({
+            "error": "Internal error",
+            "details": str(e)
+        }), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
