@@ -6,14 +6,14 @@ import cv2
 from pdf2image import convert_from_bytes
 
 # ============================================================
-# STRICT PRODUCTION ENGINE
+# FINAL STABLE PRODUCTION ENGINE
 # ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION
-# Version 1.2.0  (with deterministic layout mismatch gate)
+# Version 1.3.0
 # Deterministic. No inference. No dynamic measurement.
 # ============================================================
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "1.2.0"
+ENGINE_VERSION = "1.3.0"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 
@@ -66,13 +66,12 @@ DISEASE_COORDINATES = {
 }
 
 # ============================================================
-# COLOR CLASSIFICATION (STRICT HSV)
+# ORIGINAL PROVEN MASK-BASED HSV CLASSIFIER
 # ============================================================
 
 def classify_risk(bgr_roi):
 
     hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
-
     total_pixels = hsv.shape[0] * hsv.shape[1]
 
     red_mask1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
@@ -86,9 +85,11 @@ def classify_risk(bgr_roi):
     orange_pct = np.count_nonzero(orange_mask) / total_pixels
     yellow_pct = np.count_nonzero(yellow_mask) / total_pixels
 
+    # No strong color
     if red_pct < 0.05 and orange_pct < 0.05 and yellow_pct < 0.05:
         return "None/Low"
 
+    # Dominant color
     if red_pct >= orange_pct and red_pct >= yellow_pct:
         return "Severe"
 
@@ -109,25 +110,22 @@ def layout_alignment_valid(page_image):
     """
     Deterministic structural sanity check.
 
-    We validate:
-    1. Expected gray background exists immediately left of X_LEFT
-    2. First disease row contains non-gray content inside X window
+    1. Background immediately left of X_LEFT must be neutral gray.
+    2. First disease row color window must contain color (non-gray).
     """
 
-    # ---- Check 1: Background left of color window should be gray ----
+    # --- Check background left of color window ---
     bg_roi = page_image[1375:1400, X_LEFT-40:X_LEFT-20]
 
     mean_b = np.mean(bg_roi[:, :, 0])
     mean_g = np.mean(bg_roi[:, :, 1])
     mean_r = np.mean(bg_roi[:, :, 2])
 
-    # Gray means channels roughly equal
     if abs(mean_r - mean_g) > 15 or abs(mean_g - mean_b) > 15:
         return False
 
-    # ---- Check 2: First row color window must contain non-gray pixels ----
+    # --- Check first row contains color ---
     first_row = page_image[1375:1400, X_LEFT:X_RIGHT]
-
     hsv = cv2.cvtColor(first_row, cv2.COLOR_BGR2HSV)
     sat = hsv[:, :, 1] / 255.0
 
@@ -138,7 +136,7 @@ def layout_alignment_valid(page_image):
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH ENDPOINT
 # ============================================================
 
 @app.route("/health", methods=["GET"])
@@ -158,7 +156,6 @@ def health():
 def detect_disease_bars():
 
     auth_header = request.headers.get("Authorization", "")
-
     if auth_header != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -166,7 +163,6 @@ def detect_disease_bars():
         return jsonify({"error": "No file provided"}), 400
 
     pdf_bytes = request.files["file"].read()
-
     pages = convert_from_bytes(pdf_bytes, dpi=300)
 
     if len(pages) < 2:
@@ -176,7 +172,7 @@ def detect_disease_bars():
     page_image = cv2.cvtColor(page_image, cv2.COLOR_RGB2BGR)
 
     # ========================================================
-    # Layout Mismatch Gate
+    # Layout mismatch gate
     # ========================================================
 
     if not layout_alignment_valid(page_image):
@@ -187,7 +183,7 @@ def detect_disease_bars():
         }), 400
 
     # ========================================================
-    # Normal Classification
+    # Classification
     # ========================================================
 
     results = {}
