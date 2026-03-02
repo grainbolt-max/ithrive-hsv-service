@@ -4,11 +4,10 @@ import cv2
 from pdf2image import convert_from_bytes
 import os
 import io
-import json
 import gc
 
-ENGINE_NAME = "ithrive_y_debug"
-ENGINE_VERSION = "3.0_y_overlay"
+ENGINE_NAME = "ithrive_y_visual_only"
+ENGINE_VERSION = "3.1_grid_only"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -27,12 +26,6 @@ def overlay():
     if "file" not in request.files:
         return "No file", 400
 
-    layout_json = request.form.get("layout_profile")
-    if not layout_json:
-        return "layout_profile required", 400
-
-    layout = json.loads(layout_json)
-
     pdf_bytes = request.files["file"].read()
 
     pages = convert_from_bytes(
@@ -48,42 +41,28 @@ def overlay():
 
     height, width = page.shape[:2]
 
-    # ============================
-    # GRID FOR REFERENCE
-    # ============================
+    # Draw horizontal grid every 50px
+    for y in range(0, height, 50):
+        color = (0,255,0) if y % 100 == 0 else (200,200,200)
+        cv2.line(page, (0,y), (width,y), color, 1)
 
-    for y in range(0, height, 100):
-        cv2.line(page, (0, y), (width, y), (0, 255, 0), 1)
-        cv2.putText(page, str(y), (5, y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (0, 255, 0), 1)
-
-    # ============================
-    # DRAW ALL Y ROWS
-    # ============================
-
-    for panel_name in ["panel_1", "panel_2"]:
-        rows = layout["panels"][panel_name]["rows"]
-
-        for key, row in rows.items():
-            y_top = int(row["y_top"])
-            y_bottom = int(row["y_bottom"])
-
-            # TOP line (RED)
-            cv2.line(page, (0, y_top), (width, y_top), (0, 0, 255), 2)
-
-            # BOTTOM line (BLUE)
-            cv2.line(page, (0, y_bottom), (width, y_bottom), (255, 0, 0), 2)
-
-            cv2.putText(page,
-                        f"{key}",
-                        (20, y_top - 5),
+        if y % 100 == 0:
+            cv2.putText(page, str(y),
+                        (10, y-5),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (0, 0, 255),
+                        0.5,
+                        (0,255,0),
                         1)
 
-    # ============================
+    # Draw vertical grid every 100px
+    for x in range(0, width, 100):
+        cv2.line(page, (x,0), (x,height), (0,0,255), 1)
+        cv2.putText(page, str(x),
+                    (x+5, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0,0,255),
+                    1)
 
     is_success, buffer = cv2.imencode(".png", page)
     io_buf = io.BytesIO(buffer)
