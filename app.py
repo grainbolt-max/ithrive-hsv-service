@@ -21,7 +21,7 @@ if not API_KEY:
 
 app = Flask(__name__)
 
-RENDER_DPI = 200
+RENDER_DPI = 300
 PAGE_INDEX = 1
 
 SAT_GATE = 0.35
