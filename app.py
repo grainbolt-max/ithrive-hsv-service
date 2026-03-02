@@ -6,15 +6,8 @@ import os
 import json
 import gc
 
-# ============================================================
-# PRODUCTION ENGINE
-# Stateless Layout-Driven HSV Disease Classifier
-# LOW MEMORY MODE (Free Tier Safe)
-# Deterministic — No Inference — No Fallback
-# ============================================================
-
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "1.2.0_low_memory"
+ENGINE_VERSION = "1.3.0_200dpi_stable"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -22,9 +15,7 @@ if not API_KEY:
 
 app = Flask(__name__)
 
-RENDER_DPI = 150   # Low memory safe
-PAGE_INDEX = 1     # Page 2 (0-based)
-
+RENDER_DPI = 200
 SAT_GATE = 0.35
 VAL_GATE = 0.35
 
@@ -58,10 +49,6 @@ PANEL_2_KEYS = [
     "cerebral_serotonin_decreased",
 ]
 
-# ============================================================
-# HEALTH
-# ============================================================
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -69,10 +56,6 @@ def health():
         "engine": ENGINE_NAME,
         "version": ENGINE_VERSION
     })
-
-# ============================================================
-# COLOR CLASSIFICATION
-# ============================================================
 
 def classify_hue(hue):
     if hue < 15 or hue > 345:
@@ -82,10 +65,6 @@ def classify_hue(hue):
     if 40 <= hue < 75:
         return "Mild"
     return "None/Low"
-
-# ============================================================
-# STRICT LAYOUT VALIDATION
-# ============================================================
 
 def validate_layout(layout, image_width, image_height):
     try:
@@ -124,10 +103,6 @@ def validate_layout(layout, image_width, image_height):
     except Exception:
         return False
 
-# ============================================================
-# DETECTION
-# ============================================================
-
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
 
@@ -147,10 +122,6 @@ def detect_disease_bars():
         return jsonify({"error": "No file provided"}), 400
 
     pdf_bytes = request.files["file"].read()
-
-    # ============================================================
-    # MEMORY SAFE PAGE 2 RENDER ONLY
-    # ============================================================
 
     try:
         pages = convert_from_bytes(
