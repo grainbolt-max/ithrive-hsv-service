@@ -56,7 +56,6 @@ PANEL_2_KEYS = [
     "cerebral_serotonin_decreased",
 ]
 
-
 # ============================================================
 # HEALTH
 # ============================================================
@@ -68,7 +67,6 @@ def health():
         "engine": ENGINE_NAME,
         "version": ENGINE_VERSION
     })
-
 
 # ============================================================
 # HUE CLASSIFICATION
@@ -83,12 +81,12 @@ def classify_hue(hue):
         return "Mild"
     return "None/Low"
 
-
 # ============================================================
 # LAYOUT VALIDATION
 # ============================================================
 
 def validate_layout(layout, image_width, image_height):
+
     x_left = layout.get("x_left")
     x_right = layout.get("x_right")
     panels = layout.get("panels", {})
@@ -97,6 +95,7 @@ def validate_layout(layout, image_width, image_height):
         return False, "Missing x_left or x_right"
 
     width = x_right - x_left
+
     if width < 5 or width > 50:
         return False, "x_window must be between 5 and 50 pixels"
 
@@ -119,6 +118,7 @@ def validate_layout(layout, image_width, image_height):
         ("panel_2", PANEL_2_KEYS, panel_2),
     ]:
         prev_bottom = -1
+
         for key in keys:
             y_top = int(panel[key]["y_top"])
             y_bottom = int(panel[key]["y_bottom"])
@@ -135,7 +135,6 @@ def validate_layout(layout, image_width, image_height):
             prev_bottom = y_bottom
 
     return True, None
-
 
 # ============================================================
 # DETECTION
@@ -162,15 +161,22 @@ def detect_disease_bars():
 
     pdf_bytes = request.files["file"].read()
 
+    # ---------- PDF RENDER (ALPHA SAFE) ----------
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
     if len(doc) <= PAGE_INDEX:
         return jsonify({"error": "PDF missing page 2"}), 400
 
     page = doc[PAGE_INDEX]
-    pix = page.get_pixmap(dpi=RENDER_DPI)
+
+    # Force RGB (no alpha channel)
+    pix = page.get_pixmap(dpi=RENDER_DPI, alpha=False)
+
     img = np.frombuffer(pix.samples, dtype=np.uint8)
-    img = img.reshape(pix.height, pix.width, pix.n)
+    img = img.reshape(pix.height, pix.width, 3)
+
     doc.close()
+    # ---------------------------------------------
 
     image_height, image_width = img.shape[:2]
 
@@ -194,10 +200,16 @@ def detect_disease_bars():
         (PANEL_2_KEYS, panel_2),
     ]:
         for key in panel_keys:
+
             y_top = panel_rows[key]["y_top"]
             y_bottom = panel_rows[key]["y_bottom"]
 
             row_img = img[y_top:y_bottom, x_left:x_right]
+
+            if row_img.size == 0:
+                results[key] = "None/Low"
+                continue
+
             hsv = cv2.cvtColor(row_img, cv2.COLOR_RGB2HSV)
 
             h = hsv[:, :, 0].astype(np.float32) * 2.0
