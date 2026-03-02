@@ -7,11 +7,17 @@ import json
 import gc
 
 # ============================================================
-# PRODUCTION ENGINE (X LOCK CALIBRATION VERSION)
+# ITHRIVE HSV ENGINE — CALIBRATION BUILD
+# X BAND HARD LOCKED TO 905–915
+# Page 2 Only
+# 150 DPI
+# Deterministic
+# No Inference
+# No Fallback
 # ============================================================
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "1.6.0_x_locked_745"
+ENGINE_VERSION = "1.7.0_x_locked_905"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -20,12 +26,14 @@ if not API_KEY:
 app = Flask(__name__)
 
 RENDER_DPI = 150
+PAGE_INDEX = 1
+
 SAT_GATE = 0.35
 VAL_GATE = 0.35
 
-# 🔒 LOCKED X BAND (CALIBRATION)
-LOCKED_X_LEFT = 745
-LOCKED_X_RIGHT = 755
+# 🔒 CALIBRATION LOCK
+LOCKED_X_LEFT = 905
+LOCKED_X_RIGHT = 915
 
 PANEL_1_KEYS = [
     "large_artery_stiffness",
@@ -57,6 +65,10 @@ PANEL_2_KEYS = [
     "cerebral_serotonin_decreased",
 ]
 
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
@@ -64,6 +76,10 @@ def health():
         "engine": ENGINE_NAME,
         "version": ENGINE_VERSION
     })
+
+# ============================================================
+# HUE CLASSIFICATION
+# ============================================================
 
 def classify_hue(hue):
     if hue < 15 or hue > 345:
@@ -73,6 +89,10 @@ def classify_hue(hue):
     if 40 <= hue < 75:
         return "Mild"
     return "None/Low"
+
+# ============================================================
+# DETECTION
+# ============================================================
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
@@ -94,6 +114,10 @@ def detect_disease_bars():
 
     pdf_bytes = request.files["file"].read()
 
+    # ============================================================
+    # MEMORY SAFE PAGE 2 RENDER ONLY
+    # ============================================================
+
     try:
         pages = convert_from_bytes(
             pdf_bytes,
@@ -114,7 +138,7 @@ def detect_disease_bars():
 
     image_height, image_width = page_image.shape[:2]
 
-    # 🔒 USE LOCKED X VALUES
+    # 🔒 FORCE X BAND
     x_left = LOCKED_X_LEFT
     x_right = LOCKED_X_RIGHT
 
@@ -164,6 +188,8 @@ def detect_disease_bars():
         "x_right_used": x_right,
         "results": results
     })
+
+# ============================================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
