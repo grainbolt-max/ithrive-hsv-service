@@ -1,19 +1,20 @@
 from flask import Flask, request, jsonify
 import numpy as np
 import cv2
+from pdf2image import convert_from_bytes
 import os
 import json
-from pdf2image import convert_from_bytes
+import gc
 
 # ============================================================
 # PRODUCTION ENGINE
 # Stateless Layout-Driven HSV Disease Classifier
+# LOW MEMORY MODE (Free Tier Safe)
 # Deterministic — No Inference — No Fallback
-# Renderer: pdf2image (calibrated baseline)
 # ============================================================
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "1.2.0_low_memory"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -21,8 +22,8 @@ if not API_KEY:
 
 app = Flask(__name__)
 
-RENDER_DPI = 300
-PAGE_INDEX = 1
+RENDER_DPI = 150   # Low memory safe
+PAGE_INDEX = 1     # Page 2 (0-based)
 
 SAT_GATE = 0.35
 VAL_GATE = 0.35
@@ -70,7 +71,7 @@ def health():
     })
 
 # ============================================================
-# HUE CLASSIFICATION
+# COLOR CLASSIFICATION
 # ============================================================
 
 def classify_hue(hue):
@@ -87,52 +88,41 @@ def classify_hue(hue):
 # ============================================================
 
 def validate_layout(layout, image_width, image_height):
-    x_left = layout.get("x_left")
-    x_right = layout.get("x_right")
-    panels = layout.get("panels", {})
+    try:
+        x_left = int(layout["x_left"])
+        x_right = int(layout["x_right"])
+        panels = layout["panels"]
 
-    if x_left is None or x_right is None:
-        return False
-
-    width = x_right - x_left
-    if width < 5 or width > 50:
-        return False
-
-    if x_right > image_width:
-        return False
-
-    panel_1 = panels.get("panel_1", {}).get("rows", {})
-    panel_2 = panels.get("panel_2", {}).get("rows", {})
-
-    for key in PANEL_1_KEYS:
-        if key not in panel_1:
+        width = x_right - x_left
+        if width < 5 or width > 50:
             return False
 
-    for key in PANEL_2_KEYS:
-        if key not in panel_2:
+        if x_right > image_width:
             return False
 
-    for keys, panel in [
-        (PANEL_1_KEYS, panel_1),
-        (PANEL_2_KEYS, panel_2),
-    ]:
-        prev_bottom = -1
-        for key in keys:
-            y_top = int(panel[key]["y_top"])
-            y_bottom = int(panel[key]["y_bottom"])
+        for panel_name, keys in [
+            ("panel_1", PANEL_1_KEYS),
+            ("panel_2", PANEL_2_KEYS),
+        ]:
+            rows = panels[panel_name]["rows"]
+            prev_bottom = -1
 
-            if y_top >= y_bottom:
-                return False
+            for key in keys:
+                y_top = int(rows[key]["y_top"])
+                y_bottom = int(rows[key]["y_bottom"])
 
-            if y_top < prev_bottom:
-                return False
+                if y_top >= y_bottom:
+                    return False
+                if y_top < prev_bottom:
+                    return False
+                if y_bottom > image_height:
+                    return False
 
-            if y_bottom > image_height:
-                return False
+                prev_bottom = y_bottom
 
-            prev_bottom = y_bottom
-
-    return True
+        return True
+    except Exception:
+        return False
 
 # ============================================================
 # DETECTION
@@ -141,8 +131,7 @@ def validate_layout(layout, image_width, image_height):
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect_disease_bars():
 
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header != f"Bearer {API_KEY}":
+    if request.headers.get("Authorization", "") != f"Bearer {API_KEY}":
         return jsonify({"error": "Unauthorized"}), 401
 
     layout_json = request.form.get("layout_profile")
@@ -159,50 +148,55 @@ def detect_disease_bars():
 
     pdf_bytes = request.files["file"].read()
 
-    # ---- RENDER USING pdf2image (calibrated baseline) ----
-    try:
-        pages = convert_from_bytes(pdf_bytes, dpi=RENDER_DPI)
+    # ============================================================
+    # MEMORY SAFE PAGE 2 RENDER ONLY
+    # ============================================================
 
-        if len(pages) <= PAGE_INDEX:
+    try:
+        pages = convert_from_bytes(
+            pdf_bytes,
+            dpi=RENDER_DPI,
+            first_page=2,
+            last_page=2
+        )
+
+        if not pages:
             return jsonify({"error": "layout_mismatch"}), 400
 
-        page_image = np.array(pages[PAGE_INDEX])
-        img = cv2.cvtColor(page_image, cv2.COLOR_RGB2BGR)
+        page_image = np.array(pages[0])
+        del pages
+        gc.collect()
 
     except Exception:
         return jsonify({"error": "layout_mismatch"}), 400
 
-    image_height, image_width = img.shape[:2]
+    image_height, image_width = page_image.shape[:2]
 
-    valid = validate_layout(layout, image_width, image_height)
-    if not valid:
-        return jsonify({
-            "error": "layout_mismatch"
-        }), 400
+    if not validate_layout(layout, image_width, image_height):
+        return jsonify({"error": "layout_mismatch"}), 400
 
-    x_left = layout["x_left"]
-    x_right = layout["x_right"]
-
-    panel_1 = layout["panels"]["panel_1"]["rows"]
-    panel_2 = layout["panels"]["panel_2"]["rows"]
+    x_left = int(layout["x_left"])
+    x_right = int(layout["x_right"])
 
     results = {}
 
-    for panel_keys, panel_rows in [
-        (PANEL_1_KEYS, panel_1),
-        (PANEL_2_KEYS, panel_2),
+    for panel_name, keys in [
+        ("panel_1", PANEL_1_KEYS),
+        ("panel_2", PANEL_2_KEYS),
     ]:
-        for key in panel_keys:
-            y_top = int(panel_rows[key]["y_top"])
-            y_bottom = int(panel_rows[key]["y_bottom"])
+        rows = layout["panels"][panel_name]["rows"]
 
-            row_img = img[y_top:y_bottom, x_left:x_right]
+        for key in keys:
+            y_top = int(rows[key]["y_top"])
+            y_bottom = int(rows[key]["y_bottom"])
 
-            if row_img.size == 0:
+            roi = page_image[y_top:y_bottom, x_left:x_right]
+
+            if roi.size == 0:
                 results[key] = "None/Low"
                 continue
 
-            hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
+            hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
 
             h = hsv[:, :, 0].astype(np.float32) * 2.0
             s = hsv[:, :, 1] / 255.0
@@ -212,17 +206,19 @@ def detect_disease_bars():
 
             if not np.any(mask):
                 results[key] = "None/Low"
-                continue
+            else:
+                hue = float(np.median(h[mask]))
+                results[key] = classify_hue(hue)
 
-            hue = float(np.median(h[mask]))
-            results[key] = classify_hue(hue)
+            del roi
+            del hsv
+
+    del page_image
+    gc.collect()
 
     return jsonify({
         "engine": ENGINE_NAME,
         "version": ENGINE_VERSION,
+        "dpi": RENDER_DPI,
         "results": results
     })
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
