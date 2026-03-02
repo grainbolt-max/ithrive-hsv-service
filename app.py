@@ -6,8 +6,8 @@ import os
 import io
 import gc
 
-ENGINE_NAME = "ithrive_visual_debug"
-ENGINE_VERSION = "2.0_visual_overlay"
+ENGINE_NAME = "ithrive_visual_compare"
+ENGINE_VERSION = "2.1_compare_overlay"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -17,8 +17,11 @@ app = Flask(__name__)
 
 RENDER_DPI = 150
 
-# CHANGE THIS TO TEST ANY X POSITION
-TEST_X = 905   # <-- You can change this to 745, 706, etc.
+# 🔴 OLD WRONG POSITION
+OLD_X = 905
+
+# 🟢 CORRECT RANGE CENTER
+NEW_X = 725
 
 @app.route("/v1/overlay", methods=["POST"])
 def overlay():
@@ -44,9 +47,9 @@ def overlay():
 
     height, width = page.shape[:2]
 
-    # ======================================
-    # DRAW GRID
-    # ======================================
+    # ================================
+    # GRID
+    # ================================
 
     for x in range(0, width, 100):
         cv2.line(page, (x, 0), (x, height), (0, 0, 255), 1)
@@ -56,21 +59,28 @@ def overlay():
 
     for y in range(0, height, 100):
         cv2.line(page, (0, y), (width, y), (0, 255, 0), 1)
-        cv2.putText(page, str(y), (5, y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (0, 255, 0), 1)
 
-    # ======================================
-    # DRAW TEST SAMPLING BAND
-    # ======================================
+    # ================================
+    # OLD WRONG LINE (BLUE)
+    # ================================
 
-    cv2.line(page, (TEST_X, 0), (TEST_X, height), (255, 0, 0), 3)
-    cv2.putText(page, f"TEST_X = {TEST_X}",
-                (TEST_X + 10, 60),
+    cv2.line(page, (OLD_X, 0), (OLD_X, height), (255, 0, 0), 4)
+    cv2.putText(page, f"OLD_X = {OLD_X}",
+                (OLD_X + 10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8, (255, 0, 0), 2)
+                0.7, (255, 0, 0), 2)
 
-    # ======================================
+    # ================================
+    # NEW CORRECT LINE (GREEN)
+    # ================================
+
+    cv2.line(page, (NEW_X, 0), (NEW_X, height), (0, 255, 0), 4)
+    cv2.putText(page, f"NEW_X = {NEW_X}",
+                (NEW_X + 10, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7, (0, 255, 0), 2)
+
+    # ================================
 
     is_success, buffer = cv2.imencode(".png", page)
     io_buf = io.BytesIO(buffer)
