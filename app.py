@@ -1,14 +1,15 @@
 from flask import Flask, request, jsonify
 import numpy as np
 import cv2
-import fitz  # PyMuPDF
 import os
 import json
+from pdf2image import convert_from_bytes
 
 # ============================================================
 # PRODUCTION ENGINE
 # Stateless Layout-Driven HSV Disease Classifier
 # Deterministic — No Inference — No Fallback
+# Renderer: pdf2image (calibrated baseline)
 # ============================================================
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
@@ -158,16 +159,16 @@ def detect_disease_bars():
 
     pdf_bytes = request.files["file"].read()
 
+    # ---- RENDER USING pdf2image (calibrated baseline) ----
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        if len(doc) <= PAGE_INDEX:
+        pages = convert_from_bytes(pdf_bytes, dpi=RENDER_DPI)
+
+        if len(pages) <= PAGE_INDEX:
             return jsonify({"error": "layout_mismatch"}), 400
 
-        page = doc[PAGE_INDEX]
-        pix = page.get_pixmap(dpi=RENDER_DPI)
-        img = np.frombuffer(pix.samples, dtype=np.uint8)
-        img = img.reshape(pix.height, pix.width, pix.n)
-        doc.close()
+        page_image = np.array(pages[PAGE_INDEX])
+        img = cv2.cvtColor(page_image, cv2.COLOR_RGB2BGR)
+
     except Exception:
         return jsonify({"error": "layout_mismatch"}), 400
 
@@ -201,7 +202,7 @@ def detect_disease_bars():
                 results[key] = "None/Low"
                 continue
 
-            hsv = cv2.cvtColor(row_img, cv2.COLOR_RGB2HSV)
+            hsv = cv2.cvtColor(row_img, cv2.COLOR_BGR2HSV)
 
             h = hsv[:, :, 0].astype(np.float32) * 2.0
             s = hsv[:, :, 1] / 255.0
