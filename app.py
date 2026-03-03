@@ -13,6 +13,7 @@ if not API_KEY:
     raise RuntimeError("ITHRIVE_API_KEY not set")
 
 app = Flask(__name__)
+print("BOOT OK — ENGINE:", ENGINE_VERSION)
 
 RENDER_DPI = 150
 X_LEFT = 704
