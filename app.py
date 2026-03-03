@@ -18,6 +18,7 @@ RENDER_DPI = 150
 X_LEFT = 704
 X_RIGHT = 710
 
+# Deterministic minimum required colored rows to consider layout valid
 MIN_REQUIRED_COLOR_ROWS = 5
 
 DISEASE_COORDINATES = {
@@ -134,6 +135,7 @@ def detect():
             if outcome["color_ratio"] > 0.05:
                 total_color_hits += 1
 
+        # Deterministic layout mismatch gate
         if total_color_hits < MIN_REQUIRED_COLOR_ROWS:
             return jsonify({
                 "error": "LAYOUT_MISMATCH",
