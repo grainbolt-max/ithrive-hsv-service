@@ -5,24 +5,23 @@ from pdf2image import convert_from_bytes
 import os
 import gc
 
-ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "3.2.3_alignment_and_order_fix"
+ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v2_WITH_MISMATCH_GUARD"
+ENGINE_VERSION = "3.3.0_canonical_layout_guard"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
     raise RuntimeError("ITHRIVE_API_KEY not set")
 
-app = Flask(__name__)
+app = Flask(name)
 
 RENDER_DPI = 150
-
-# Keep sampling narrow to avoid gray background contamination
 X_LEFT = 704
 X_RIGHT = 710
 
-DISEASE_COORDINATES = {
+# Deterministic minimum required colored rows to consider layout valid
+MIN_REQUIRED_COLOR_ROWS = 5
 
-    # ---- Cardiovascular ----
+DISEASE_COORDINATES = {
     "large_artery_stiffness": (689, 709),
     "peripheral_vessel": (714, 734),
     "blood_pressure_uncontrolled": (739, 759),
@@ -30,19 +29,13 @@ DISEASE_COORDINATES = {
     "atherosclerosis": (789, 809),
     "ldl_cholesterol": (814, 834),
     "lv_hypertrophy": (839, 859),
-
-    # ---- Metabolic ----
     "metabolic_syndrome": (874, 894),
     "insulin_resistance": (899, 919),
     "beta_cell_function_decreased": (924, 944),
     "blood_glucose_uncontrolled": (949, 969),
     "tissue_inflammatory_process": (974, 994),
-
-    # ---- Endocrine ----
     "hypothyroidism": (1145, 1165),
     "hyperthyroidism": (1170, 1190),
-
-    # ---- Organ Function / Other ----
     "hepatic_fibrosis": (1195, 1215),
     "chronic_hepatitis": (1215, 1235),
     "prostate_cancer": (1235, 1255),
@@ -61,37 +54,34 @@ def classify_risk(roi):
     total_pixels = hsv.shape[0] * hsv.shape[1]
 
     if total_pixels == 0:
-        return "None/Low"
+        return {"label": "None/Low", "color_ratio": 0.0}
 
-    # Severe (red)
     red_mask1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
     red_mask2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
     red_mask = red_mask1 + red_mask2
 
-    # Moderate (orange)
-    orange_mask = cv2.inRange(hsv, (15, 100, 100), (29, 255, 255))
-
-    # Mild (yellow)
-    yellow_mask = cv2.inRange(hsv, (30, 80, 80), (70, 255, 255))
+    orange_mask = cv2.inRange(hsv, (15, 100, 100), (30, 255, 255))
+    yellow_mask = cv2.inRange(hsv, (31, 100, 100), (65, 255, 255))
 
     red_pct = np.count_nonzero(red_mask) / total_pixels
     orange_pct = np.count_nonzero(orange_mask) / total_pixels
     yellow_pct = np.count_nonzero(yellow_mask) / total_pixels
 
-    # Ignore noise
-    if max(red_pct, orange_pct, yellow_pct) < 0.05:
-        return "None/Low"
+    dominant_ratio = max(red_pct, orange_pct, yellow_pct)
 
-    if red_pct > orange_pct and red_pct > yellow_pct:
-        return "Severe"
+    if dominant_ratio < 0.05:
+        return {"label": "None/Low", "color_ratio": dominant_ratio}
 
-    if orange_pct > red_pct and orange_pct > yellow_pct:
-        return "Moderate"
+    if red_pct >= orange_pct and red_pct >= yellow_pct:
+        return {"label": "Severe", "color_ratio": red_pct}
 
-    if yellow_pct > red_pct and yellow_pct > orange_pct:
-        return "Mild"
+    if orange_pct >= red_pct and orange_pct >= yellow_pct:
+        return {"label": "Moderate", "color_ratio": orange_pct}
 
-    return "None/Low"
+    if yellow_pct >= red_pct and yellow_pct >= orange_pct:
+        return {"label": "Mild", "color_ratio": yellow_pct}
+
+    return {"label": "None/Low", "color_ratio": dominant_ratio}
 
 
 @app.route("/health", methods=["GET"])
@@ -130,14 +120,33 @@ def detect():
         gc.collect()
 
         results = {}
+        total_color_hits = 0
+        low_confidence_rows = 0
 
         for disease, (y1, y2) in DISEASE_COORDINATES.items():
             roi = page_image[y1:y2, X_LEFT:X_RIGHT]
 
             if roi.size == 0:
                 results[disease] = "None/Low"
+                low_confidence_rows += 1
+                continue
+
+            outcome = classify_risk(roi)
+            results[disease] = outcome["label"]
+
+            if outcome["color_ratio"] > 0.05:
+                total_color_hits += 1
             else:
-                results[disease] = classify_risk(roi)
+                low_confidence_rows += 1
+
+        # Deterministic layout mismatch gate
+        if total_color_hits < MIN_REQUIRED_COLOR_ROWS:
+            return jsonify({
+                "error": "LAYOUT_MISMATCH",
+                "reason": "Insufficient stripe confidence",
+                "color_hits": total_color_hits,
+                "required": MIN_REQUIRED_COLOR_ROWS
+            }), 422
 
         del page_image
         gc.collect()
@@ -155,5 +164,5 @@ def detect():
         }), 500
 
 
-if __name__ == "__main__":
+if name == "main":
     app.run(host="0.0.0.0", port=10000)
