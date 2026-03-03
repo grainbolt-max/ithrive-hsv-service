@@ -6,7 +6,7 @@ import os
 import gc
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "3.2.1_yellow_band_fix"
+ENGINE_VERSION = "3.2.2_vertical_alignment_fix"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -19,18 +19,26 @@ X_LEFT = 704
 X_RIGHT = 710
 
 DISEASE_COORDINATES = {
+    # Cardiovascular
     "large_artery_stiffness": (689, 709),
-    "peripheral_vessel": (714, 734),
-    "blood_pressure_uncontrolled": (739, 759),
+
+    # Shifted up 5px (vertical correction)
+    "peripheral_vessel": (709, 729),
+    "blood_pressure_uncontrolled": (734, 754),
+
     "small_medium_artery_stiffness": (764, 784),
     "atherosclerosis": (789, 809),
     "ldl_cholesterol": (814, 834),
     "lv_hypertrophy": (839, 859),
+
+    # Metabolic
     "metabolic_syndrome": (874, 894),
     "insulin_resistance": (899, 919),
     "beta_cell_function_decreased": (924, 944),
     "blood_glucose_uncontrolled": (949, 969),
     "tissue_inflammatory_process": (974, 994),
+
+    # Miscellaneous
     "hypothyroidism": (1145, 1165),
     "hyperthyroidism": (1170, 1190),
     "hepatic_fibrosis": (1195, 1215),
@@ -52,28 +60,20 @@ def classify_risk(roi):
     if total_pixels == 0:
         return "None/Low"
 
-    # --- Severe (Red) ---
     red_mask1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
     red_mask2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
     red_mask = red_mask1 + red_mask2
 
-    # --- Moderate (Orange) ---
-    # Tightened upper bound to prevent overlap with yellow
     orange_mask = cv2.inRange(hsv, (15, 100, 100), (29, 255, 255))
-
-    # --- Mild (Yellow) ---
-    # Expanded and protected band so yellow survives
     yellow_mask = cv2.inRange(hsv, (30, 80, 80), (70, 255, 255))
 
     red_pct = np.count_nonzero(red_mask) / total_pixels
     orange_pct = np.count_nonzero(orange_mask) / total_pixels
     yellow_pct = np.count_nonzero(yellow_mask) / total_pixels
 
-    # Minimum visibility threshold
     if max(red_pct, orange_pct, yellow_pct) < 0.05:
         return "None/Low"
 
-    # Preserve strict priority — no ties
     if red_pct > orange_pct and red_pct > yellow_pct:
         return "Severe"
 
