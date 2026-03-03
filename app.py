@@ -18,7 +18,6 @@ RENDER_DPI = 150
 X_LEFT = 704
 X_RIGHT = 710
 
-# Deterministic minimum required colored rows to consider layout valid
 MIN_REQUIRED_COLOR_ROWS = 5
 
 DISEASE_COORDINATES = {
@@ -121,14 +120,12 @@ def detect():
 
         results = {}
         total_color_hits = 0
-        low_confidence_rows = 0
 
         for disease, (y1, y2) in DISEASE_COORDINATES.items():
             roi = page_image[y1:y2, X_LEFT:X_RIGHT]
 
             if roi.size == 0:
                 results[disease] = "None/Low"
-                low_confidence_rows += 1
                 continue
 
             outcome = classify_risk(roi)
@@ -136,10 +133,7 @@ def detect():
 
             if outcome["color_ratio"] > 0.05:
                 total_color_hits += 1
-            else:
-                low_confidence_rows += 1
 
-        # Deterministic layout mismatch gate
         if total_color_hits < MIN_REQUIRED_COLOR_ROWS:
             return jsonify({
                 "error": "LAYOUT_MISMATCH",
