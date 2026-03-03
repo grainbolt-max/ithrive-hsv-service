@@ -6,7 +6,7 @@ import os
 import gc
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "3.2.0_stable_return_fix"
+ENGINE_VERSION = "3.2.1_yellow_band_fix"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -52,30 +52,39 @@ def classify_risk(roi):
     if total_pixels == 0:
         return "None/Low"
 
+    # --- Severe (Red) ---
     red_mask1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
     red_mask2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
     red_mask = red_mask1 + red_mask2
 
-    orange_mask = cv2.inRange(hsv, (15, 100, 100), (30, 255, 255))
-    yellow_mask = cv2.inRange(hsv, (31, 100, 100), (65, 255, 255))
+    # --- Moderate (Orange) ---
+    # Tightened upper bound to prevent overlap with yellow
+    orange_mask = cv2.inRange(hsv, (15, 100, 100), (29, 255, 255))
+
+    # --- Mild (Yellow) ---
+    # Expanded and protected band so yellow survives
+    yellow_mask = cv2.inRange(hsv, (30, 80, 80), (70, 255, 255))
 
     red_pct = np.count_nonzero(red_mask) / total_pixels
     orange_pct = np.count_nonzero(orange_mask) / total_pixels
     yellow_pct = np.count_nonzero(yellow_mask) / total_pixels
 
+    # Minimum visibility threshold
     if max(red_pct, orange_pct, yellow_pct) < 0.05:
         return "None/Low"
 
-    if red_pct >= orange_pct and red_pct >= yellow_pct:
+    # Preserve strict priority — no ties
+    if red_pct > orange_pct and red_pct > yellow_pct:
         return "Severe"
 
-    if orange_pct >= red_pct and orange_pct >= yellow_pct:
+    if orange_pct > red_pct and orange_pct > yellow_pct:
         return "Moderate"
 
-    if yellow_pct >= red_pct and yellow_pct >= orange_pct:
+    if yellow_pct > red_pct and yellow_pct > orange_pct:
         return "Mild"
 
     return "None/Low"
+
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -85,6 +94,7 @@ def health():
         "version": ENGINE_VERSION,
         "dpi": RENDER_DPI
     })
+
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
 def detect():
@@ -135,6 +145,7 @@ def detect():
             "error": "Internal error",
             "details": str(e)
         }), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
