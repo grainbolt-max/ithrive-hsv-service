@@ -6,7 +6,7 @@ import os
 import gc
 
 ENGINE_NAME = "ithrive_color_engine_page2_coordinate_lock_v1_PRODUCTION"
-ENGINE_VERSION = "3.2.2_vertical_alignment_fix"
+ENGINE_VERSION = "3.2.3_alignment_and_order_fix"
 
 API_KEY = os.environ.get("ITHRIVE_API_KEY")
 if not API_KEY:
@@ -15,32 +15,34 @@ if not API_KEY:
 app = Flask(__name__)
 
 RENDER_DPI = 150
+
+# Keep sampling narrow to avoid gray background contamination
 X_LEFT = 704
 X_RIGHT = 710
 
 DISEASE_COORDINATES = {
-    # Cardiovascular
+
+    # ---- Cardiovascular ----
     "large_artery_stiffness": (689, 709),
-
-    # Shifted up 5px (vertical correction)
-    "peripheral_vessel": (709, 729),
-    "blood_pressure_uncontrolled": (734, 754),
-
+    "peripheral_vessel": (714, 734),
+    "blood_pressure_uncontrolled": (739, 759),
     "small_medium_artery_stiffness": (764, 784),
     "atherosclerosis": (789, 809),
     "ldl_cholesterol": (814, 834),
     "lv_hypertrophy": (839, 859),
 
-    # Metabolic
+    # ---- Metabolic ----
     "metabolic_syndrome": (874, 894),
     "insulin_resistance": (899, 919),
     "beta_cell_function_decreased": (924, 944),
     "blood_glucose_uncontrolled": (949, 969),
     "tissue_inflammatory_process": (974, 994),
 
-    # Miscellaneous
+    # ---- Endocrine ----
     "hypothyroidism": (1145, 1165),
     "hyperthyroidism": (1170, 1190),
+
+    # ---- Organ Function / Other ----
     "hepatic_fibrosis": (1195, 1215),
     "chronic_hepatitis": (1215, 1235),
     "prostate_cancer": (1235, 1255),
@@ -53,6 +55,7 @@ DISEASE_COORDINATES = {
     "cerebral_serotonin_decreased": (1425, 1445),
 }
 
+
 def classify_risk(roi):
     hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
     total_pixels = hsv.shape[0] * hsv.shape[1]
@@ -60,17 +63,22 @@ def classify_risk(roi):
     if total_pixels == 0:
         return "None/Low"
 
+    # Severe (red)
     red_mask1 = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
     red_mask2 = cv2.inRange(hsv, (170, 100, 100), (180, 255, 255))
     red_mask = red_mask1 + red_mask2
 
+    # Moderate (orange)
     orange_mask = cv2.inRange(hsv, (15, 100, 100), (29, 255, 255))
+
+    # Mild (yellow)
     yellow_mask = cv2.inRange(hsv, (30, 80, 80), (70, 255, 255))
 
     red_pct = np.count_nonzero(red_mask) / total_pixels
     orange_pct = np.count_nonzero(orange_mask) / total_pixels
     yellow_pct = np.count_nonzero(yellow_mask) / total_pixels
 
+    # Ignore noise
     if max(red_pct, orange_pct, yellow_pct) < 0.05:
         return "None/Low"
 
