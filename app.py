@@ -5,6 +5,7 @@ import cv2
 import hashlib
 import base64
 import io
+import os
 
 app = Flask(__name__)
 
@@ -23,15 +24,18 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# TEMPLATE REGISTRATION (Radiology-style alignment)
+# TEMPLATE REGISTRATION
+# Aligns incoming scans to a known reference
 # ----------------------------------------------------
 
 def register_to_template(page):
 
-    template = cv2.imread("page2_template.png")
+    template_path = "page2_template.png"
 
-    if template is None:
+    if not os.path.exists(template_path):
         return page
+
+    template = cv2.imread(template_path)
 
     gray1 = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
@@ -76,7 +80,8 @@ def register_to_template(page):
 
 
 # ----------------------------------------------------
-# HOSPITAL-GRADE TABLE DETECTION (No coordinates)
+# TABLE ROW DETECTION
+# Hospital-style dynamic layout detection
 # ----------------------------------------------------
 
 def detect_table_rows(img):
@@ -92,15 +97,12 @@ def detect_table_rows(img):
         4
     )
 
-    horizontal_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (40,1)
-    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
 
     horizontal = cv2.morphologyEx(
         thresh,
         cv2.MORPH_OPEN,
-        horizontal_kernel,
+        kernel,
         iterations=2
     )
 
@@ -125,7 +127,7 @@ def detect_table_rows(img):
 
 
 # ----------------------------------------------------
-# COLOR DETECTION
+# COLOR BAR DETECTION
 # ----------------------------------------------------
 
 def detect_color_presence(region):
@@ -137,7 +139,9 @@ def detect_color_presence(region):
 
     mask = cv2.inRange(hsv, lower, upper)
 
-    return cv2.countNonZero(mask) > 200
+    pixels = cv2.countNonZero(mask)
+
+    return pixels > 200
 
 
 # ----------------------------------------------------
@@ -178,7 +182,7 @@ def pdf_metadata():
 
 
 # ----------------------------------------------------
-# HOSPITAL ENGINE (Dynamic table extraction)
+# MAIN ENGINE
 # ----------------------------------------------------
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -220,7 +224,7 @@ def detect_disease_bars():
         idx += 1
 
     return jsonify({
-        "engine":"hospital_table_engine_v1",
+        "engine":"ithrive_hospital_engine_v1",
         "rows_detected":len(results),
         "results":results
     })
