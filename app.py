@@ -9,9 +9,9 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# --------------------------------------------------
-# CURRENT TEST COORDINATES
-# --------------------------------------------------
+# ---------------------------------------------------------
+# CURRENT TEST RECTANGLE
+# ---------------------------------------------------------
 
 TEMPLATE_BAR_X = 900
 TEMPLATE_BAR_Y = 540
@@ -21,13 +21,13 @@ ROW_HEIGHT = 42
 TOTAL_ROWS = 22
 
 
-# --------------------------------------------------
+# ---------------------------------------------------------
 # AUTH
-# --------------------------------------------------
+# ---------------------------------------------------------
 
 def require_auth(req):
 
-    auth_header = req.headers.get("Authorization", "")
+    auth_header = req.headers.get("Authorization","")
 
     if not auth_header.startswith("Bearer "):
         return False
@@ -37,60 +37,64 @@ def require_auth(req):
     return token == API_KEY
 
 
-# --------------------------------------------------
-# DRAW BIG COORDINATE GRID
-# --------------------------------------------------
+# ---------------------------------------------------------
+# DRAW GRID
+# ---------------------------------------------------------
 
-def draw_coordinate_grid(img):
+def draw_grid(img):
 
     h, w = img.shape[:2]
 
-    for x in range(0, w, 200):
+    for x in range(0, w, 25):
 
-        cv2.line(img, (x,0), (x,h), (180,180,180), 2)
+        color = (0,200,0)  # green minor grid
+        thickness = 1
 
-        cv2.putText(
-            img,
-            f"X={x}",
-            (x+5,60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.2,
-            (0,0,255),
-            3
-        )
+        if x % 100 == 0:
+            color = (0,0,255)  # red major grid
+            thickness = 2
 
-    for y in range(0, h, 200):
+        cv2.line(img,(x,0),(x,h),color,thickness)
 
-        cv2.line(img, (0,y), (w,y), (180,180,180), 2)
+        if x % 100 == 0:
+            cv2.putText(
+                img,
+                str(x),
+                (x+5,30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0,0,255),
+                2
+            )
 
-        cv2.putText(
-            img,
-            f"Y={y}",
-            (20,y+40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.2,
-            (0,0,255),
-            3
-        )
+    for y in range(0, h, 25):
+
+        color = (0,200,0)
+        thickness = 1
+
+        if y % 100 == 0:
+            color = (0,0,255)
+            thickness = 2
+
+        cv2.line(img,(0,y),(w,y),color,thickness)
+
+        if y % 100 == 0:
+            cv2.putText(
+                img,
+                str(y),
+                (5,y+30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0,0,255),
+                2
+            )
 
     return img
 
 
-# --------------------------------------------------
-# DRAW CROSSHAIR AT RECTANGLE START
-# --------------------------------------------------
-
-def draw_crosshair(img,x,y):
-
-    cv2.line(img,(x-20,y),(x+20,y),(0,255,0),3)
-    cv2.line(img,(x,y-20),(x,y+20),(0,255,0),3)
-
-    return img
-
-
-# --------------------------------------------------
+# ---------------------------------------------------------
 # DEBUG OVERLAY
-# --------------------------------------------------
+# ---------------------------------------------------------
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
@@ -109,7 +113,7 @@ def debug_overlay():
 
     overlay = page.copy()
 
-    overlay = draw_coordinate_grid(overlay)
+    overlay = draw_grid(overlay)
 
     for i in range(TOTAL_ROWS):
 
@@ -124,18 +128,14 @@ def debug_overlay():
             3
         )
 
-        overlay = draw_crosshair(overlay,x,y)
-
-        label = f"({x},{y})"
-
         cv2.putText(
             overlay,
-            label,
-            (x+10,y-10),
+            f"({x},{y})",
+            (x+5,y-5),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1,
+            0.7,
             (255,0,0),
-            3
+            2
         )
 
     _, buffer = cv2.imencode(".png",overlay)
@@ -146,18 +146,18 @@ def debug_overlay():
     )
 
 
-# --------------------------------------------------
+# ---------------------------------------------------------
 # HEALTH
-# --------------------------------------------------
+# ---------------------------------------------------------
 
-@app.route("/",methods=["GET"])
+@app.route("/")
 def health():
     return jsonify({"status":"ITHRIVE parser running"})
 
 
-# --------------------------------------------------
-# SERVER START
-# --------------------------------------------------
+# ---------------------------------------------------------
+# START SERVER
+# ---------------------------------------------------------
 
 if __name__ == "__main__":
 
