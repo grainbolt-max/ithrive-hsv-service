@@ -1,73 +1,92 @@
 from flask import Flask, request, jsonify, send_file
-import os
-import numpy as np
 from pdf2image import convert_from_bytes
+import numpy as np
 import cv2
 import io
+import os
 
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# -------------------------
-# PAGE 2 BAR PARAMETERS
-# -------------------------
+# ============================================================
+# TEMPLATE CONFIG
+# ============================================================
 
-# MOVE LEFT INTO SCORE BAR COLUMN
-BAR_X = 660
-BAR_WIDTH = 300
+TEMPLATE_FILE = "page2_template.png"
 
+# These coordinates are measured ONCE from the template image
+# (they are stable because the template is fixed)
+TEMPLATE_BAR_X = 870
+TEMPLATE_BAR_Y = 420
+BAR_WIDTH = 320
 ROW_HEIGHT = 42
-
-START_Y = 360
-
 TOTAL_ROWS = 22
 
-# -------------------------
+# ============================================================
 # AUTH
-# -------------------------
+# ============================================================
 
-def check_auth(req):
+def require_auth(req):
     auth = req.headers.get("Authorization", "")
-    return auth == f"Bearer {API_KEY}"
+    if not auth.startswith("Bearer "):
+        return False
+    token = auth.split("Bearer ")[1].strip()
+    return token == API_KEY
 
-# -------------------------
-# ROOT
-# -------------------------
 
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({"status": "ITHRIVE HSV Service Running"})
+# ============================================================
+# TEMPLATE ALIGNMENT
+# ============================================================
 
-# -------------------------
+def find_template_offset(page_img):
+    template = cv2.imread(TEMPLATE_FILE)
+
+    page_gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
+    template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+    result = cv2.matchTemplate(page_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+
+    _, _, _, max_loc = cv2.minMaxLoc(result)
+
+    offset_x = max_loc[0]
+    offset_y = max_loc[1]
+
+    return offset_x, offset_y
+
+
+# ============================================================
 # DEBUG OVERLAY
-# -------------------------
+# ============================================================
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
 
-    if not check_auth(request):
+    if not require_auth(request):
         return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "missing file"}), 400
 
-    pdf = request.files["file"].read()
+    pdf_bytes = request.files["file"].read()
 
-    images = convert_from_bytes(pdf, dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = np.array(images[1])
+    page = np.array(pages[1])
+
+    offset_x, offset_y = find_template_offset(page)
 
     overlay = page.copy()
 
     for i in range(TOTAL_ROWS):
 
-        y = START_Y + (i * ROW_HEIGHT)
+        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
+        x = TEMPLATE_BAR_X + offset_x
 
         cv2.rectangle(
             overlay,
-            (BAR_X, y),
-            (BAR_X + BAR_WIDTH, y + ROW_HEIGHT),
+            (x, y),
+            (x + BAR_WIDTH, y + ROW_HEIGHT),
             (255, 0, 0),
             2
         )
@@ -79,58 +98,68 @@ def debug_overlay():
         mimetype="image/png"
     )
 
-# -------------------------
+
+# ============================================================
 # SCORE EXTRACTION
-# -------------------------
+# ============================================================
 
 @app.route("/v1/extract", methods=["POST"])
 def extract():
 
-    if not check_auth(request):
+    if not require_auth(request):
         return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
         return jsonify({"error": "missing file"}), 400
 
-    pdf = request.files["file"].read()
+    pdf_bytes = request.files["file"].read()
 
-    images = convert_from_bytes(pdf, dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = np.array(images[1])
+    page = np.array(pages[1])
 
-    results = []
+    offset_x, offset_y = find_template_offset(page)
+
+    scores = []
 
     for i in range(TOTAL_ROWS):
 
-        y = START_Y + (i * ROW_HEIGHT)
+        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
+        x = TEMPLATE_BAR_X + offset_x
 
-        crop = page[
-            y:y + ROW_HEIGHT,
-            BAR_X:BAR_X + BAR_WIDTH
-        ]
+        region = page[y:y+ROW_HEIGHT, x:x+BAR_WIDTH]
 
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
-        mask = cv2.inRange(
-            hsv,
-            (80, 50, 50),
-            (140, 255, 255)
-        )
+        lower = np.array([70, 50, 50])
+        upper = np.array([170, 255, 255])
 
-        ratio = np.sum(mask > 0) / mask.size
+        mask = cv2.inRange(hsv, lower, upper)
 
-        score = int(ratio * 100)
+        pixels = cv2.countNonZero(mask)
 
-        results.append(score)
+        score = int((pixels / (BAR_WIDTH * ROW_HEIGHT)) * 100)
+
+        scores.append(score)
 
     return jsonify({
-        "engine": "v57_runtime_anchor_probe",
-        "scores": results
+        "engine": "template_anchor_v1",
+        "scores": scores
     })
 
-# -------------------------
-# START SERVER
-# -------------------------
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({"status": "ITHRIVE HSV Service Running"})
+
+
+# ============================================================
+# SERVER START
+# ============================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
