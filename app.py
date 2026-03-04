@@ -13,35 +13,35 @@ BASE_LAYOUT = {
 
     # PAGE 2 – CARDIO / DIABETES
 
-    "large_artery_stiffness": {"x": 720, "y": 750, "w": 520, "h": 42},
-    "peripheral_vessel": {"x": 720, "y": 792, "w": 520, "h": 42},
-    "blood_pressure_uncontrolled": {"x": 720, "y": 834, "w": 520, "h": 42},
-    "small_medium_artery": {"x": 720, "y": 876, "w": 520, "h": 42},
-    "atherosclerosis": {"x": 720, "y": 918, "w": 520, "h": 42},
-    "ldl_cholesterol": {"x": 720, "y": 960, "w": 520, "h": 42},
-    "lv_hypertrophy": {"x": 720, "y": 1002, "w": 520, "h": 42},
+    "large_artery_stiffness": {"x": 600, "y": 750, "w": 520, "h": 42},
+    "peripheral_vessel": {"x": 600, "y": 792, "w": 520, "h": 42},
+    "blood_pressure_uncontrolled": {"x": 600, "y": 834, "w": 520, "h": 42},
+    "small_medium_artery": {"x": 600, "y": 876, "w": 520, "h": 42},
+    "atherosclerosis": {"x": 600, "y": 918, "w": 520, "h": 42},
+    "ldl_cholesterol": {"x": 600, "y": 960, "w": 520, "h": 42},
+    "lv_hypertrophy": {"x": 600, "y": 1002, "w": 520, "h": 42},
 
-    "metabolic_syndrome": {"x": 720, "y": 1080, "w": 520, "h": 42},
-    "insulin_resistance": {"x": 720, "y": 1122, "w": 520, "h": 42},
-    "beta_cell_function": {"x": 720, "y": 1164, "w": 520, "h": 42},
-    "blood_glucose": {"x": 720, "y": 1206, "w": 520, "h": 42},
-    "tissue_inflammation": {"x": 720, "y": 1248, "w": 520, "h": 42},
+    "metabolic_syndrome": {"x": 600, "y": 1080, "w": 520, "h": 42},
+    "insulin_resistance": {"x": 600, "y": 1122, "w": 520, "h": 42},
+    "beta_cell_function": {"x": 600, "y": 1164, "w": 520, "h": 42},
+    "blood_glucose": {"x": 600, "y": 1206, "w": 520, "h": 42},
+    "tissue_inflammation": {"x": 600, "y": 1248, "w": 520, "h": 42},
 
     # PAGE 3 – MISC DISEASES
 
-    "hypothyroidism": {"x": 720, "y": 520, "w": 520, "h": 42},
-    "hyperthyroidism": {"x": 720, "y": 562, "w": 520, "h": 42},
-    "hepatic_fibrosis": {"x": 720, "y": 604, "w": 520, "h": 42},
-    "chronic_hepatitis": {"x": 720, "y": 646, "w": 520, "h": 42},
+    "hypothyroidism": {"x": 600, "y": 520, "w": 520, "h": 42},
+    "hyperthyroidism": {"x": 600, "y": 562, "w": 520, "h": 42},
+    "hepatic_fibrosis": {"x": 600, "y": 604, "w": 520, "h": 42},
+    "chronic_hepatitis": {"x": 600, "y": 646, "w": 520, "h": 42},
 
-    "respiratory_disorders": {"x": 720, "y": 726, "w": 520, "h": 42},
-    "kidney_function": {"x": 720, "y": 768, "w": 520, "h": 42},
-    "digestive_disorders": {"x": 720, "y": 810, "w": 520, "h": 42},
+    "respiratory_disorders": {"x": 600, "y": 726, "w": 520, "h": 42},
+    "kidney_function": {"x": 600, "y": 768, "w": 520, "h": 42},
+    "digestive_disorders": {"x": 600, "y": 810, "w": 520, "h": 42},
 
-    "major_depression": {"x": 720, "y": 920, "w": 520, "h": 42},
-    "adhd_learning": {"x": 720, "y": 962, "w": 520, "h": 42},
-    "dopamine_decrease": {"x": 720, "y": 1004, "w": 520, "h": 42},
-    "serotonin_decrease": {"x": 720, "y": 1046, "w": 520, "h": 42},
+    "major_depression": {"x": 600, "y": 920, "w": 520, "h": 42},
+    "adhd_learning": {"x": 600, "y": 962, "w": 520, "h": 42},
+    "dopamine_decrease": {"x": 600, "y": 1004, "w": 520, "h": 42},
+    "serotonin_decrease": {"x": 600, "y": 1046, "w": 520, "h": 42},
 }
 
 
