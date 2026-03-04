@@ -1,169 +1,166 @@
 from flask import Flask, request, jsonify, send_file
-from pdf2image import convert_from_bytes
-import numpy as np
-import cv2
-import io
 import os
+import numpy as np
+from pdf2image import convert_from_bytes
+import cv2
+import hashlib
+import base64
 
-app = Flask(__name__)
+# NEW ROUTER IMPORT
+from parser.router import choose_parser
 
+app = Flask(name)
+
+ENGINE_NAME = "v57_runtime_anchor_probe"
 API_KEY = "ithrive_secure_2026_key"
 
-# ---------------------------------------------------------
-# CURRENT TEST RECTANGLE
-# ---------------------------------------------------------
 
-TEMPLATE_BAR_X = 900
-TEMPLATE_BAR_Y = 540
-
-BAR_WIDTH = 340
-ROW_HEIGHT = 42
-TOTAL_ROWS = 22
-
-
-# ---------------------------------------------------------
+# -------------------------------------------------------
 # AUTH
-# ---------------------------------------------------------
+# -------------------------------------------------------
 
 def require_auth(req):
-
-    auth_header = req.headers.get("Authorization","")
-
+    auth_header = req.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return False
-
     token = auth_header.split("Bearer ")[1].strip()
-
     return token == API_KEY
 
 
-# ---------------------------------------------------------
-# DRAW GRID
-# ---------------------------------------------------------
+# -------------------------------------------------------
+# FIND FIRST NON-WHITE ROW
+# -------------------------------------------------------
 
-def draw_grid(img):
-
-    h, w = img.shape[:2]
-
-    for x in range(0, w, 25):
-
-        color = (0,200,0)  # green minor grid
-        thickness = 1
-
-        if x % 100 == 0:
-            color = (0,0,255)  # red major grid
-            thickness = 2
-
-        cv2.line(img,(x,0),(x,h),color,thickness)
-
-        if x % 100 == 0:
-            cv2.putText(
-                img,
-                str(x),
-                (x+5,30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0,0,255),
-                2
-            )
-
-    for y in range(0, h, 25):
-
-        color = (0,200,0)
-        thickness = 1
-
-        if y % 100 == 0:
-            color = (0,0,255)
-            thickness = 2
-
-        cv2.line(img,(0,y),(w,y),color,thickness)
-
-        if y % 100 == 0:
-            cv2.putText(
-                img,
-                str(y),
-                (5,y+30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0,0,255),
-                2
-            )
-
-    return img
+def find_first_nonwhite_row(img):
+    h, w, _ = img.shape
+    for y in range(h):
+        row = img[y:y+1, :]
+        if np.mean(row) < 250:
+            return y
+    return 0
 
 
-# ---------------------------------------------------------
-# DEBUG OVERLAY
-# ---------------------------------------------------------
+# -------------------------------------------------------
+# FIND RISK BARS (EXISTING HSV LOGIC)
+# -------------------------------------------------------
+
+def detect_bar_color(region):
+
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+
+    lower = np.array([70,50,50])
+    upper = np.array([170,255,255])
+
+    mask = cv2.inRange(hsv, lower, upper)
+
+    pixels = cv2.countNonZero(mask)
+
+    return pixels > 200
+
+
+# -------------------------------------------------------
+# DEBUG OVERLAY ENDPOINT
+# -------------------------------------------------------
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
 
     if not require_auth(request):
-        return jsonify({"error":"unauthorized"}),401
+        return jsonify({"error":"unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error":"missing file"}),400
+        return jsonify({"error":"no file"}), 400
 
     pdf_bytes = request.files["file"].read()
 
-    pages = convert_from_bytes(pdf_bytes,dpi=200)
+    images = convert_from_bytes(pdf_bytes)
 
-    page = np.array(pages[1])
+    if len(images) < 2:
+        return jsonify({"error":"page 2 missing"}), 400
 
-    overlay = page.copy()
+    img = np.array(images[1])
 
-    overlay = draw_grid(overlay)
+    # ---------------------------------------------------
+    # NEW: ROUTER DETECTION
+    # ---------------------------------------------------
 
-    for i in range(TOTAL_ROWS):
+    parser_choice = choose_parser(img)
 
-        x = TEMPLATE_BAR_X
-        y = TEMPLATE_BAR_Y + (i * ROW_HEIGHT)
+    print("Detected parser:", parser_choice)
+
+    # ---------------------------------------------------
+    # EXISTING DEBUG OVERLAY LOGIC
+    # ---------------------------------------------------
+
+    h, w, _ = img.shape
+
+    BAR_X = 760
+    BAR_WIDTH = 340
+
+    overlay = img.copy()
+
+    for y in range(500, 2000, 40):
+
+        region = img[y:y+40, BAR_X:BAR_X+BAR_WIDTH]
+
+        if region.size == 0:
+            continue
+
+        detected = detect_bar_color(region)
+
+        color = (0,255,0) if detected else (0,0,255)
 
         cv2.rectangle(
             overlay,
-            (x,y),
-            (x+BAR_WIDTH,y+ROW_HEIGHT),
-            (255,0,0),
-            3
-        )
-
-        cv2.putText(
-            overlay,
-            f"({x},{y})",
-            (x+5,y-5),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255,0,0),
+            (BAR_X, y),
+            (BAR_X + BAR_WIDTH, y + 40),
+            color,
             2
         )
 
-    _, buffer = cv2.imencode(".png",overlay)
+    output_path = "debug_overlay.png"
 
-    return send_file(
-        io.BytesIO(buffer),
-        mimetype="image/png"
-    )
+    cv2.imwrite(output_path, overlay)
 
-
-# ---------------------------------------------------------
-# HEALTH
-# ---------------------------------------------------------
-
-@app.route("/")
-def health():
-    return jsonify({"status":"ITHRIVE parser running"})
+    return send_file(output_path, mimetype="image/png")
 
 
-# ---------------------------------------------------------
+# -------------------------------------------------------
+# PDF METADATA ENDPOINT
+# -------------------------------------------------------
+
+@app.route("/v1/pdf-metadata", methods=["POST"])
+def pdf_metadata():
+
+    if not require_auth(request):
+        return jsonify({"error":"unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error":"no file"}), 400
+
+    pdf_bytes = request.files["file"].read()
+
+    images = convert_from_bytes(pdf_bytes)
+
+    page = np.array(images[1])
+
+    small = cv2.resize(page, (200,200))
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    pixel_hash = hashlib.sha256(gray.tobytes()).digest()
+
+    pixel_hash_b64 = base64.b64encode(pixel_hash).decode()
+
+    return jsonify({
+        "engine": ENGINE_NAME,
+        "pixel_hash_b64": pixel_hash_b64
+    })
+
+
+# -------------------------------------------------------
 # START SERVER
-# ---------------------------------------------------------
+# -------------------------------------------------------
 
-if __name__ == "__main__":
-
-    port = int(os.environ.get("PORT",10000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+if name == "main":
+    app.run(host="0.0.0.0", port=10000)
