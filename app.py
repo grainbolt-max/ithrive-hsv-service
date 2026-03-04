@@ -11,6 +11,7 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
+
 # ----------------------------------------------------
 # AUTH
 # ----------------------------------------------------
@@ -24,8 +25,7 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# TEMPLATE REGISTRATION
-# Aligns incoming scans to a known reference
+# TEMPLATE ALIGNMENT
 # ----------------------------------------------------
 
 def register_to_template(page):
@@ -51,7 +51,6 @@ def register_to_template(page):
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
     matches = matcher.match(des1, des2)
-
     matches = sorted(matches, key=lambda x: x.distance)
 
     if len(matches) < 10:
@@ -80,54 +79,7 @@ def register_to_template(page):
 
 
 # ----------------------------------------------------
-# TABLE ROW DETECTION
-# Hospital-style dynamic layout detection
-# ----------------------------------------------------
-
-def detect_table_rows(img):
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    thresh = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV,
-        15,
-        4
-    )
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40,1))
-
-    horizontal = cv2.morphologyEx(
-        thresh,
-        cv2.MORPH_OPEN,
-        kernel,
-        iterations=2
-    )
-
-    contours, _ = cv2.findContours(
-        horizontal,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    rows = []
-
-    for c in contours:
-
-        x,y,w,h = cv2.boundingRect(c)
-
-        if w > 400:
-            rows.append((x,y,w,h))
-
-    rows = sorted(rows, key=lambda r: r[1])
-
-    return rows
-
-
-# ----------------------------------------------------
-# COLOR BAR DETECTION
+# COLOR DETECTION
 # ----------------------------------------------------
 
 def detect_color_presence(region):
@@ -139,9 +91,46 @@ def detect_color_presence(region):
 
     mask = cv2.inRange(hsv, lower, upper)
 
-    pixels = cv2.countNonZero(mask)
+    return cv2.countNonZero(mask) > 200
 
-    return pixels > 200
+
+# ----------------------------------------------------
+# BAR COLUMN (SET BY CALIBRATION)
+# ----------------------------------------------------
+
+BAR_X = 1120
+BAR_WIDTH = 340
+
+BASE_LAYOUT = {
+
+    "large_artery_stiffness": {"y":750,"h":42},
+    "peripheral_vessel": {"y":792,"h":42},
+    "blood_pressure_uncontrolled": {"y":834,"h":42},
+    "small_medium_artery": {"y":876,"h":42},
+    "atherosclerosis": {"y":918,"h":42},
+    "ldl_cholesterol": {"y":960,"h":42},
+    "lv_hypertrophy": {"y":1002,"h":42},
+
+    "metabolic_syndrome": {"y":1080,"h":42},
+    "insulin_resistance": {"y":1122,"h":42},
+    "beta_cell_function": {"y":1164,"h":42},
+    "blood_glucose": {"y":1206,"h":42},
+    "tissue_inflammation": {"y":1248,"h":42},
+
+    "hypothyroidism": {"y":520,"h":42},
+    "hyperthyroidism": {"y":562,"h":42},
+    "hepatic_fibrosis": {"y":604,"h":42},
+    "chronic_hepatitis": {"y":646,"h":42},
+
+    "respiratory_disorders": {"y":726,"h":42},
+    "kidney_function": {"y":768,"h":42},
+    "digestive_disorders": {"y":810,"h":42},
+
+    "major_depression": {"y":920,"h":42},
+    "adhd_learning": {"y":962,"h":42},
+    "dopamine_decrease": {"y":1004,"h":42},
+    "serotonin_decrease": {"y":1046,"h":42},
+}
 
 
 # ----------------------------------------------------
@@ -153,9 +142,6 @@ def pdf_metadata():
 
     if not require_auth(request):
         return jsonify({"error":"Unauthorized"}),401
-
-    if "file" not in request.files:
-        return jsonify({"error":"No file"}),400
 
     pdf_bytes = request.files["file"].read()
 
@@ -182,7 +168,7 @@ def pdf_metadata():
 
 
 # ----------------------------------------------------
-# MAIN ENGINE
+# DISEASE DETECTION
 # ----------------------------------------------------
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -190,9 +176,6 @@ def detect_disease_bars():
 
     if not require_auth(request):
         return jsonify({"error":"Unauthorized"}),401
-
-    if "file" not in request.files:
-        return jsonify({"error":"No file"}),400
 
     pdf_bytes = request.files["file"].read()
 
@@ -202,30 +185,24 @@ def detect_disease_bars():
 
     page = register_to_template(page)
 
-    rows = detect_table_rows(page)
-
     results = {}
 
-    idx = 0
+    for disease,coords in BASE_LAYOUT.items():
 
-    for x,y,w,h in rows:
+        y = coords["y"]
+        h = coords["h"]
 
-        region = page[y:y+h, 1040:1560]
+        region = page[y:y+h, BAR_X:BAR_X+BAR_WIDTH]
 
         if region.size == 0:
             continue
 
         has_color = detect_color_presence(region)
 
-        label = f"row_{idx}"
-
-        results[label] = "Moderate" if has_color else "None/Low"
-
-        idx += 1
+        results[disease] = "Moderate" if has_color else "None/Low"
 
     return jsonify({
-        "engine":"ithrive_hospital_engine_v1",
-        "rows_detected":len(results),
+        "engine":"ithrive_hsv_template_locked",
         "results":results
     })
 
@@ -248,16 +225,17 @@ def debug_overlay():
 
     page = register_to_template(page)
 
-    rows = detect_table_rows(page)
-
     overlay = page.copy()
 
-    for x,y,w,h in rows:
+    for disease,coords in BASE_LAYOUT.items():
+
+        y = coords["y"]
+        h = coords["h"]
 
         cv2.rectangle(
             overlay,
-            (x,y),
-            (x+w,y+h),
+            (BAR_X,y),
+            (BAR_X+BAR_WIDTH,y+h),
             (0,0,255),
             2
         )
@@ -270,15 +248,9 @@ def debug_overlay():
     )
 
 
-# ----------------------------------------------------
-# HEALTH CHECK
-# ----------------------------------------------------
-
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({
-        "status":"ITHRIVE HSV Service Running"
-    })
+    return jsonify({"status":"ITHRIVE HSV Service Running"})
 
 
 if __name__ == "__main__":
