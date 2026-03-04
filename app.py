@@ -1,25 +1,24 @@
-from flask import Flask, request, jsonify, send_file  
-from pdf2image import convert_from_bytes  
-import numpy as np  
-import cv2  
-import os  
+from flask import Flask, request, jsonify, send_file
+from pdf2image import convert_from_bytes
+import numpy as np
+import cv2
+import os
 
-app = Flask(name)
+app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
+
 # ======================================
-# REFERENCE PAGE SIZE (FROM METADATA)
+# REFERENCE PAGE SIZE (CALIBRATED LAYOUT)
 # ======================================
 
-REF_WIDTH = 1700  
-REF_HEIGHT = 2200  
+REF_WIDTH = 1700
+REF_HEIGHT = 2200
 
-# Stripe location in reference layout
-REF_X_LEFT = 950  
-REF_X_RIGHT = 1250  
+REF_X_LEFT = 950
+REF_X_RIGHT = 1250
 
-# Disease row coordinates in reference layout
 REF_DISEASE_ROWS = [
     (689, 709),
     (714, 734),
@@ -46,6 +45,7 @@ REF_DISEASE_ROWS = [
     (1405, 1425),
     (1425, 1445)
 ]
+
 
 # ======================================
 # AUTH
@@ -74,10 +74,7 @@ def scale_coordinates(page_width, page_height):
     rows = []
 
     for y1, y2 in REF_DISEASE_ROWS:
-        rows.append((
-            int(y1 * scale_y),
-            int(y2 * scale_y)
-        ))
+        rows.append((int(y1 * scale_y), int(y2 * scale_y)))
 
     return x_left, x_right, rows
 
@@ -120,7 +117,40 @@ def debug_overlay():
 
 
 # ======================================
-# HEALTH
+# PDF METADATA
+# ======================================
+
+@app.route("/v1/pdf-metadata", methods=["POST"])
+def pdf_metadata():
+
+    if not require_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    pdf_file = request.files["file"]
+    pdf_bytes = pdf_file.read()
+
+    images = convert_from_bytes(pdf_bytes, dpi=200)
+
+    if not images:
+        return jsonify({"error": "Unable to render PDF"}), 422
+
+    page = np.array(images[0])
+
+    page_height, page_width = page.shape[:2]
+
+    return jsonify({
+        "page_width": page_width,
+        "page_height": page_height,
+        "page_count": len(images),
+        "file_size": len(pdf_bytes)
+    })
+
+
+# ======================================
+# HEALTH CHECK
 # ======================================
 
 @app.route("/", methods=["GET"])
@@ -128,6 +158,8 @@ def health():
     return jsonify({"status": "ITHRIVE HSV Service Running"})
 
 
-if name == "main":
+if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 10000))
+
     app.run(host="0.0.0.0", port=port)
