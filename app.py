@@ -2,54 +2,16 @@ from flask import Flask, request, jsonify, send_file
 from pdf2image import convert_from_bytes
 import numpy as np
 import cv2
-import os
+import hashlib
+import base64
+import io
 
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
+CANONICAL_HASH = "YlLY455AeeVlZXU8xGy1yd04QIomu+5OyCOaFw+8oHg="
 
-# ======================================
-# REFERENCE PAGE SIZE (CALIBRATED LAYOUT)
-# ======================================
-
-REF_WIDTH = 1700
-REF_HEIGHT = 2200
-
-REF_X_LEFT = 950
-REF_X_RIGHT = 1250
-
-REF_DISEASE_ROWS = [
-    (689, 709),
-    (714, 734),
-    (739, 759),
-    (764, 784),
-    (789, 809),
-    (814, 834),
-    (839, 859),
-    (874, 894),
-    (899, 919),
-    (924, 944),
-    (949, 969),
-    (974, 994),
-    (1145, 1165),
-    (1170, 1190),
-    (1195, 1215),
-    (1215, 1235),
-    (1235, 1255),
-    (1260, 1280),
-    (1285, 1305),
-    (1310, 1330),
-    (1355, 1375),
-    (1380, 1400),
-    (1405, 1425),
-    (1425, 1445)
-]
-
-
-# ======================================
-# AUTH
-# ======================================
 
 def require_auth(req):
     auth_header = req.headers.get("Authorization", "")
@@ -59,66 +21,39 @@ def require_auth(req):
     return token == API_KEY
 
 
-# ======================================
-# SCALE COORDINATES
-# ======================================
+BASE_LAYOUT = {
 
-def scale_coordinates(page_width, page_height):
+    # PAGE 2 – CARDIO / DIABETES
+    "large_artery_stiffness": {"x": 1040, "y": 750, "w": 520, "h": 42},
+    "peripheral_vessel": {"x": 1040, "y": 792, "w": 520, "h": 42},
+    "blood_pressure_uncontrolled": {"x": 1040, "y": 834, "w": 520, "h": 42},
+    "small_medium_artery": {"x": 1040, "y": 876, "w": 520, "h": 42},
+    "atherosclerosis": {"x": 1040, "y": 918, "w": 520, "h": 42},
+    "ldl_cholesterol": {"x": 1040, "y": 960, "w": 520, "h": 42},
+    "lv_hypertrophy": {"x": 1040, "y": 1002, "w": 520, "h": 42},
 
-    scale_x = page_width / REF_WIDTH
-    scale_y = page_height / REF_HEIGHT
+    "metabolic_syndrome": {"x": 1040, "y": 1080, "w": 520, "h": 42},
+    "insulin_resistance": {"x": 1040, "y": 1122, "w": 520, "h": 42},
+    "beta_cell_function": {"x": 1040, "y": 1164, "w": 520, "h": 42},
+    "blood_glucose": {"x": 1040, "y": 1206, "w": 520, "h": 42},
+    "tissue_inflammation": {"x": 1040, "y": 1248, "w": 520, "h": 42},
 
-    x_left = int(REF_X_LEFT * scale_x)
-    x_right = int(REF_X_RIGHT * scale_x)
+    # PAGE 3 – MISC DISEASES
+    "hypothyroidism": {"x": 1040, "y": 520, "w": 520, "h": 42},
+    "hyperthyroidism": {"x": 1040, "y": 562, "w": 520, "h": 42},
+    "hepatic_fibrosis": {"x": 1040, "y": 604, "w": 520, "h": 42},
+    "chronic_hepatitis": {"x": 1040, "y": 646, "w": 520, "h": 42},
 
-    rows = []
+    "respiratory_disorders": {"x": 1040, "y": 726, "w": 520, "h": 42},
+    "kidney_function": {"x": 1040, "y": 768, "w": 520, "h": 42},
+    "digestive_disorders": {"x": 1040, "y": 810, "w": 520, "h": 42},
 
-    for y1, y2 in REF_DISEASE_ROWS:
-        rows.append((int(y1 * scale_y), int(y2 * scale_y)))
+    "major_depression": {"x": 1040, "y": 920, "w": 520, "h": 42},
+    "adhd_learning": {"x": 1040, "y": 962, "w": 520, "h": 42},
+    "dopamine_decrease": {"x": 1040, "y": 1004, "w": 520, "h": 42},
+    "serotonin_decrease": {"x": 1040, "y": 1046, "w": 520, "h": 42},
+}
 
-    return x_left, x_right, rows
-
-
-# ======================================
-# DEBUG OVERLAY
-# ======================================
-
-@app.route("/v1/debug-overlay", methods=["POST"])
-def debug_overlay():
-
-    if not require_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-
-    pdf_file = request.files["file"]
-    pdf_bytes = pdf_file.read()
-
-    images = convert_from_bytes(pdf_bytes, dpi=200)
-
-    if len(images) < 2:
-        return jsonify({"error": "PDF must contain at least 2 pages"}), 422
-
-    page = np.array(images[1])
-
-    page_height, page_width = page.shape[:2]
-
-    x_left, x_right, rows = scale_coordinates(page_width, page_height)
-
-    for y1, y2 in rows:
-        cv2.rectangle(page, (x_left, y1), (x_right, y2), (0, 0, 255), 3)
-
-    output_path = "/tmp/debug_overlay.png"
-
-    cv2.imwrite(output_path, page)
-
-    return send_file(output_path, mimetype="image/png")
-
-
-# ======================================
-# PDF METADATA
-# ======================================
 
 @app.route("/v1/pdf-metadata", methods=["POST"])
 def pdf_metadata():
@@ -129,29 +64,69 @@ def pdf_metadata():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
-    pdf_file = request.files["file"]
-    pdf_bytes = pdf_file.read()
+    pdf_bytes = request.files["file"].read()
 
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    if not images:
-        return jsonify({"error": "Unable to render PDF"}), 422
+    first_page = np.array(images[0])
 
-    page = np.array(images[0])
+    page_height, page_width = first_page.shape[:2]
 
-    page_height, page_width = page.shape[:2]
+    small = cv2.resize(first_page, (200, 200))
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    sha = hashlib.sha256(gray.tobytes()).digest()
+
+    pixel_hash_b64 = base64.b64encode(sha).decode("utf-8")
 
     return jsonify({
         "page_width": page_width,
         "page_height": page_height,
+        "file_size": len(pdf_bytes),
         "page_count": len(images),
-        "file_size": len(pdf_bytes)
+        "pixel_hash_b64": pixel_hash_b64
     })
 
 
-# ======================================
-# HEALTH CHECK
-# ======================================
+@app.route("/v1/debug-overlay", methods=["POST"])
+def debug_overlay():
+
+    if not require_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    pdf_bytes = request.files["file"].read()
+
+    images = convert_from_bytes(pdf_bytes, dpi=200)
+
+    page = np.array(images[1])
+
+    overlay = page.copy()
+
+    for disease, c in BASE_LAYOUT.items():
+
+        x = c["x"]
+        y = c["y"]
+        w = c["w"]
+        h = c["h"]
+
+        cv2.rectangle(
+            overlay,
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),
+            2
+        )
+
+    _, buffer = cv2.imencode(".png", overlay)
+
+    return send_file(
+        io.BytesIO(buffer.tobytes()),
+        mimetype="image/png"
+    )
+
 
 @app.route("/", methods=["GET"])
 def health():
@@ -159,7 +134,4 @@ def health():
 
 
 if __name__ == "__main__":
-
-    port = int(os.environ.get("PORT", 10000))
-
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
