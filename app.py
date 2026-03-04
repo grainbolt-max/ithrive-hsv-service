@@ -5,20 +5,26 @@ import cv2
 import io
 import os
 
+# ============================================================
+# APP INIT
+# ============================================================
+
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
 # ============================================================
-# TEMPLATE CONFIG
+# TEMPLATE CONFIGURATION
 # ============================================================
 
+# Template image used to anchor alignment
 TEMPLATE_FILE = "page2_template.png"
 
-# These coordinates are measured ONCE from the template image
-# (they are stable because the template is fixed)
-TEMPLATE_BAR_X = 870
+# Coordinates measured from the template image itself
+# These correspond to the first disease score bar row
+TEMPLATE_BAR_X = 980
 TEMPLATE_BAR_Y = 420
+
 BAR_WIDTH = 320
 ROW_HEIGHT = 42
 TOTAL_ROWS = 22
@@ -36,10 +42,11 @@ def require_auth(req):
 
 
 # ============================================================
-# TEMPLATE ALIGNMENT
+# TEMPLATE MATCHING
 # ============================================================
 
 def find_template_offset(page_img):
+
     template = cv2.imread(TEMPLATE_FILE)
 
     page_gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
@@ -56,7 +63,7 @@ def find_template_offset(page_img):
 
 
 # ============================================================
-# DEBUG OVERLAY
+# DEBUG OVERLAY ENDPOINT
 # ============================================================
 
 @app.route("/v1/debug-overlay", methods=["POST"])
@@ -80,8 +87,8 @@ def debug_overlay():
 
     for i in range(TOTAL_ROWS):
 
-        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
         x = TEMPLATE_BAR_X + offset_x
+        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
 
         cv2.rectangle(
             overlay,
@@ -124,8 +131,8 @@ def extract():
 
     for i in range(TOTAL_ROWS):
 
-        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
         x = TEMPLATE_BAR_X + offset_x
+        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
 
         region = page[y:y+ROW_HEIGHT, x:x+BAR_WIDTH]
 
@@ -143,13 +150,13 @@ def extract():
         scores.append(score)
 
     return jsonify({
-        "engine": "template_anchor_v1",
+        "engine": "template_anchor_v2",
         "scores": scores
     })
 
 
 # ============================================================
-# ROOT
+# HEALTH CHECK
 # ============================================================
 
 @app.route("/", methods=["GET"])
@@ -162,5 +169,10 @@ def root():
 # ============================================================
 
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
