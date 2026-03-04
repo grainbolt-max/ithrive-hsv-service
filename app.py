@@ -25,6 +25,29 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
+# AUTO CROP PAGE (removes huge white margins)
+# ----------------------------------------------------
+
+def autocrop_page(img):
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    mask = gray < 250
+
+    coords = np.column_stack(np.where(mask))
+
+    if coords.size == 0:
+        return img
+
+    y0, x0 = coords.min(axis=0)
+    y1, x1 = coords.max(axis=0)
+
+    cropped = img[y0:y1, x0:x1]
+
+    return cropped
+
+
+# ----------------------------------------------------
 # TEMPLATE ALIGNMENT
 # ----------------------------------------------------
 
@@ -79,7 +102,7 @@ def register_to_template(page):
 
 
 # ----------------------------------------------------
-# COLOR DETECTION
+# HSV COLOR DETECTION
 # ----------------------------------------------------
 
 def detect_color_presence(region):
@@ -95,11 +118,16 @@ def detect_color_presence(region):
 
 
 # ----------------------------------------------------
-# BAR COLUMN (SET BY CALIBRATION)
+# BAR COLUMN LOCATION (from calibration)
 # ----------------------------------------------------
 
 BAR_X = 1120
 BAR_WIDTH = 340
+
+
+# ----------------------------------------------------
+# ROW LAYOUT
+# ----------------------------------------------------
 
 BASE_LAYOUT = {
 
@@ -181,7 +209,7 @@ def detect_disease_bars():
 
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = np.array(images[1])
+    page = autocrop_page(np.array(images[1]))
 
     page = register_to_template(page)
 
@@ -221,7 +249,7 @@ def debug_overlay():
 
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = np.array(images[1])
+    page = autocrop_page(np.array(images[1]))
 
     page = register_to_template(page)
 
@@ -247,6 +275,10 @@ def debug_overlay():
         mimetype="image/png"
     )
 
+
+# ----------------------------------------------------
+# HEALTH CHECK
+# ----------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def health():
