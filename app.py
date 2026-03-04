@@ -10,8 +10,9 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-CANONICAL_HASH = "YlLY455AeeVlZXU8xGy1yd04QIomu+5OyCOaFw+8oHg="
-
+# ----------------------------------------------------
+# AUTH
+# ----------------------------------------------------
 
 def require_auth(req):
     auth_header = req.headers.get("Authorization", "")
@@ -22,78 +23,135 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# DUAL ANCHOR DETECTION (Cardio + Diabetes)
+# TEMPLATE REGISTRATION (Radiology-style alignment)
 # ----------------------------------------------------
-def find_panel_anchors(img):
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+def register_to_template(page):
 
-    lower = np.array([0, 0, 80])
-    upper = np.array([180, 40, 140])
+    template = cv2.imread("page2_template.png")
+
+    if template is None:
+        return page
+
+    gray1 = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+    orb = cv2.ORB_create(5000)
+
+    kp1, des1 = orb.detectAndCompute(gray1, None)
+    kp2, des2 = orb.detectAndCompute(gray2, None)
+
+    if des1 is None or des2 is None:
+        return page
+
+    matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+    matches = matcher.match(des1, des2)
+
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    if len(matches) < 10:
+        return page
+
+    src_pts = np.float32(
+        [kp1[m.queryIdx].pt for m in matches[:50]]
+    ).reshape(-1,1,2)
+
+    dst_pts = np.float32(
+        [kp2[m.trainIdx].pt for m in matches[:50]]
+    ).reshape(-1,1,2)
+
+    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+
+    if M is None:
+        return page
+
+    aligned = cv2.warpAffine(
+        page,
+        M,
+        (template.shape[1], template.shape[0])
+    )
+
+    return aligned
+
+
+# ----------------------------------------------------
+# HOSPITAL-GRADE TABLE DETECTION (No coordinates)
+# ----------------------------------------------------
+
+def detect_table_rows(img):
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    thresh = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        15,
+        4
+    )
+
+    horizontal_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (40,1)
+    )
+
+    horizontal = cv2.morphologyEx(
+        thresh,
+        cv2.MORPH_OPEN,
+        horizontal_kernel,
+        iterations=2
+    )
+
+    contours, _ = cv2.findContours(
+        horizontal,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    rows = []
+
+    for c in contours:
+
+        x,y,w,h = cv2.boundingRect(c)
+
+        if w > 400:
+            rows.append((x,y,w,h))
+
+    rows = sorted(rows, key=lambda r: r[1])
+
+    return rows
+
+
+# ----------------------------------------------------
+# COLOR DETECTION
+# ----------------------------------------------------
+
+def detect_color_presence(region):
+
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+
+    lower = np.array([70,50,50])
+    upper = np.array([170,255,255])
 
     mask = cv2.inRange(hsv, lower, upper)
 
-    row_strength = np.sum(mask, axis=1)
-
-    search_start = int(img.shape[0] * 0.15)
-
-    rows = row_strength[search_start:]
-
-    peaks = np.argsort(rows)[-5:]
-    peaks = sorted(peaks)
-
-    cardio_anchor = search_start + peaks[0]
-    diabetes_anchor = search_start + peaks[2]
-
-    return cardio_anchor, diabetes_anchor
-
-
-# ----------------------------------------------------
-# LAYOUT OFFSETS
-# ----------------------------------------------------
-BASE_LAYOUT = {
-
-    "large_artery_stiffness": {"x": 1040, "y": 130, "w": 520, "h": 42},
-    "peripheral_vessel": {"x": 1040, "y": 172, "w": 520, "h": 42},
-    "blood_pressure_uncontrolled": {"x": 1040, "y": 214, "w": 520, "h": 42},
-    "small_medium_artery": {"x": 1040, "y": 256, "w": 520, "h": 42},
-    "atherosclerosis": {"x": 1040, "y": 298, "w": 520, "h": 42},
-    "ldl_cholesterol": {"x": 1040, "y": 340, "w": 520, "h": 42},
-    "lv_hypertrophy": {"x": 1040, "y": 382, "w": 520, "h": 42},
-
-    "metabolic_syndrome": {"x": 1040, "y": 460, "w": 520, "h": 42},
-    "insulin_resistance": {"x": 1040, "y": 502, "w": 520, "h": 42},
-    "beta_cell_function": {"x": 1040, "y": 544, "w": 520, "h": 42},
-    "blood_glucose": {"x": 1040, "y": 586, "w": 520, "h": 42},
-    "tissue_inflammation": {"x": 1040, "y": 628, "w": 520, "h": 42},
-
-    "hypothyroidism": {"x": 1040, "y": 700, "w": 520, "h": 42},
-    "hyperthyroidism": {"x": 1040, "y": 742, "w": 520, "h": 42},
-    "hepatic_fibrosis": {"x": 1040, "y": 784, "w": 520, "h": 42},
-    "chronic_hepatitis": {"x": 1040, "y": 826, "w": 520, "h": 42},
-
-    "respiratory_disorders": {"x": 1040, "y": 906, "w": 520, "h": 42},
-    "kidney_function": {"x": 1040, "y": 948, "w": 520, "h": 42},
-    "digestive_disorders": {"x": 1040, "y": 990, "w": 520, "h": 42},
-
-    "major_depression": {"x": 1040, "y": 1100, "w": 520, "h": 42},
-    "adhd_learning": {"x": 1040, "y": 1142, "w": 520, "h": 42},
-    "dopamine_decrease": {"x": 1040, "y": 1184, "w": 520, "h": 42},
-    "serotonin_decrease": {"x": 1040, "y": 1226, "w": 520, "h": 42},
-}
+    return cv2.countNonZero(mask) > 200
 
 
 # ----------------------------------------------------
 # PDF METADATA
 # ----------------------------------------------------
+
 @app.route("/v1/pdf-metadata", methods=["POST"])
 def pdf_metadata():
 
     if not require_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
+        return jsonify({"error":"Unauthorized"}),401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+        return jsonify({"error":"No file"}),400
 
     pdf_bytes = request.files["file"].read()
 
@@ -101,35 +159,36 @@ def pdf_metadata():
 
     first_page = np.array(images[0])
 
-    page_height, page_width = first_page.shape[:2]
+    h,w = first_page.shape[:2]
 
-    small = cv2.resize(first_page, (200, 200))
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(first_page,(200,200))
+    gray = cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
 
     sha = hashlib.sha256(gray.tobytes()).digest()
 
-    pixel_hash_b64 = base64.b64encode(sha).decode("utf-8")
+    pixel_hash = base64.b64encode(sha).decode("utf-8")
 
     return jsonify({
-        "page_width": page_width,
-        "page_height": page_height,
-        "file_size": len(pdf_bytes),
-        "page_count": len(images),
-        "pixel_hash_b64": pixel_hash_b64
+        "page_width":w,
+        "page_height":h,
+        "file_size":len(pdf_bytes),
+        "page_count":len(images),
+        "pixel_hash_b64":pixel_hash
     })
 
 
 # ----------------------------------------------------
-# DEBUG OVERLAY
+# HOSPITAL ENGINE (Dynamic table extraction)
 # ----------------------------------------------------
-@app.route("/v1/debug-overlay", methods=["POST"])
-def debug_overlay():
+
+@app.route("/v1/detect-disease-bars", methods=["POST"])
+def detect_disease_bars():
 
     if not require_auth(request):
-        return jsonify({"error": "Unauthorized"}), 401
+        return jsonify({"error":"Unauthorized"}),401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+        return jsonify({"error":"No file"}),400
 
     pdf_bytes = request.files["file"].read()
 
@@ -137,32 +196,69 @@ def debug_overlay():
 
     page = np.array(images[1])
 
-    cardio_anchor, diabetes_anchor = find_panel_anchors(page)
+    page = register_to_template(page)
+
+    rows = detect_table_rows(page)
+
+    results = {}
+
+    idx = 0
+
+    for x,y,w,h in rows:
+
+        region = page[y:y+h, 1040:1560]
+
+        if region.size == 0:
+            continue
+
+        has_color = detect_color_presence(region)
+
+        label = f"row_{idx}"
+
+        results[label] = "Moderate" if has_color else "None/Low"
+
+        idx += 1
+
+    return jsonify({
+        "engine":"hospital_table_engine_v1",
+        "rows_detected":len(results),
+        "results":results
+    })
+
+
+# ----------------------------------------------------
+# DEBUG OVERLAY
+# ----------------------------------------------------
+
+@app.route("/v1/debug-overlay", methods=["POST"])
+def debug_overlay():
+
+    if not require_auth(request):
+        return jsonify({"error":"Unauthorized"}),401
+
+    pdf_bytes = request.files["file"].read()
+
+    images = convert_from_bytes(pdf_bytes, dpi=200)
+
+    page = np.array(images[1])
+
+    page = register_to_template(page)
+
+    rows = detect_table_rows(page)
 
     overlay = page.copy()
 
-    for disease, coords in BASE_LAYOUT.items():
-
-        x = coords["x"]
-        offset_y = coords["y"]
-
-        if offset_y < 450:
-            y = cardio_anchor + offset_y
-        else:
-            y = diabetes_anchor + (offset_y - 450)
-
-        w = coords["w"]
-        h = coords["h"]
+    for x,y,w,h in rows:
 
         cv2.rectangle(
             overlay,
-            (x, y),
-            (x + w, y + h),
-            (0, 0, 255),
+            (x,y),
+            (x+w,y+h),
+            (0,0,255),
             2
         )
 
-    _, buffer = cv2.imencode(".png", overlay)
+    _,buffer = cv2.imencode(".png",overlay)
 
     return send_file(
         io.BytesIO(buffer.tobytes()),
@@ -173,9 +269,12 @@ def debug_overlay():
 # ----------------------------------------------------
 # HEALTH CHECK
 # ----------------------------------------------------
+
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ITHRIVE HSV Service Running"})
+    return jsonify({
+        "status":"ITHRIVE HSV Service Running"
+    })
 
 
 if __name__ == "__main__":
