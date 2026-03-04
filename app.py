@@ -142,6 +142,11 @@ def detect_disease_bars():
         }), 422
 
 
+@app.route("/test-route", methods=["GET"])
+def test_route():
+    return jsonify({"message": "TEST ROUTE WORKING"})
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ITHRIVE HSV Service Running"})
