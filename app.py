@@ -3,51 +3,51 @@ import numpy as np
 import cv2
 from pdf2image import convert_from_bytes
 import tempfile
-import os
 
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
+
 BASE_LAYOUT = {
 
-    # PAGE 2
-    "large_artery_stiffness": {"x": 1040, "y": 750, "w": 520, "h": 42},
-    "peripheral_vessel": {"x": 1040, "y": 792, "w": 520, "h": 42},
-    "blood_pressure_uncontrolled": {"x": 1040, "y": 834, "w": 520, "h": 42},
-    "small_medium_artery": {"x": 1040, "y": 876, "w": 520, "h": 42},
-    "atherosclerosis": {"x": 1040, "y": 918, "w": 520, "h": 42},
-    "ldl_cholesterol": {"x": 1040, "y": 960, "w": 520, "h": 42},
-    "lv_hypertrophy": {"x": 1040, "y": 1002, "w": 520, "h": 42},
+    # PAGE 2 – CARDIO / DIABETES
 
-    "metabolic_syndrome": {"x": 1040, "y": 1080, "w": 520, "h": 42},
-    "insulin_resistance": {"x": 1040, "y": 1122, "w": 520, "h": 42},
-    "beta_cell_function": {"x": 1040, "y": 1164, "w": 520, "h": 42},
-    "blood_glucose": {"x": 1040, "y": 1206, "w": 520, "h": 42},
-    "tissue_inflammation": {"x": 1040, "y": 1248, "w": 520, "h": 42},
+    "large_artery_stiffness": {"x": 860, "y": 750, "w": 520, "h": 42},
+    "peripheral_vessel": {"x": 860, "y": 792, "w": 520, "h": 42},
+    "blood_pressure_uncontrolled": {"x": 860, "y": 834, "w": 520, "h": 42},
+    "small_medium_artery": {"x": 860, "y": 876, "w": 520, "h": 42},
+    "atherosclerosis": {"x": 860, "y": 918, "w": 520, "h": 42},
+    "ldl_cholesterol": {"x": 860, "y": 960, "w": 520, "h": 42},
+    "lv_hypertrophy": {"x": 860, "y": 1002, "w": 520, "h": 42},
 
-    # PAGE 3
-    "hypothyroidism": {"x": 1040, "y": 520, "w": 520, "h": 42},
-    "hyperthyroidism": {"x": 1040, "y": 562, "w": 520, "h": 42},
-    "hepatic_fibrosis": {"x": 1040, "y": 604, "w": 520, "h": 42},
-    "chronic_hepatitis": {"x": 1040, "y": 646, "w": 520, "h": 42},
+    "metabolic_syndrome": {"x": 860, "y": 1080, "w": 520, "h": 42},
+    "insulin_resistance": {"x": 860, "y": 1122, "w": 520, "h": 42},
+    "beta_cell_function": {"x": 860, "y": 1164, "w": 520, "h": 42},
+    "blood_glucose": {"x": 860, "y": 1206, "w": 520, "h": 42},
+    "tissue_inflammation": {"x": 860, "y": 1248, "w": 520, "h": 42},
 
-    "respiratory_disorders": {"x": 1040, "y": 726, "w": 520, "h": 42},
-    "kidney_function": {"x": 1040, "y": 768, "w": 520, "h": 42},
-    "digestive_disorders": {"x": 1040, "y": 810, "w": 520, "h": 42},
+    # PAGE 3 – MISC
 
-    "major_depression": {"x": 1040, "y": 920, "w": 520, "h": 42},
-    "adhd_learning": {"x": 1040, "y": 962, "w": 520, "h": 42},
-    "dopamine_decrease": {"x": 1040, "y": 1004, "w": 520, "h": 42},
-    "serotonin_decrease": {"x": 1040, "y": 1046, "w": 520, "h": 42},
+    "hypothyroidism": {"x": 860, "y": 520, "w": 520, "h": 42},
+    "hyperthyroidism": {"x": 860, "y": 562, "w": 520, "h": 42},
+    "hepatic_fibrosis": {"x": 860, "y": 604, "w": 520, "h": 42},
+    "chronic_hepatitis": {"x": 860, "y": 646, "w": 520, "h": 42},
+
+    "respiratory_disorders": {"x": 860, "y": 726, "w": 520, "h": 42},
+    "kidney_function": {"x": 860, "y": 768, "w": 520, "h": 42},
+    "digestive_disorders": {"x": 860, "y": 810, "w": 520, "h": 42},
+
+    "major_depression": {"x": 860, "y": 920, "w": 520, "h": 42},
+    "adhd_learning": {"x": 860, "y": 962, "w": 520, "h": 42},
+    "dopamine_decrease": {"x": 860, "y": 1004, "w": 520, "h": 42},
+    "serotonin_decrease": {"x": 860, "y": 1046, "w": 520, "h": 42},
 }
 
 
 def check_auth(req):
     auth = req.headers.get("Authorization", "")
-    if auth != f"Bearer {API_KEY}":
-        return False
-    return True
+    return auth == f"Bearer {API_KEY}"
 
 
 @app.route("/")
@@ -68,7 +68,6 @@ def debug_overlay():
 
     pages = convert_from_bytes(file_bytes, dpi=300)
 
-    # combine page2 + page3 vertically for debug
     page2 = np.array(pages[1])
     page3 = np.array(pages[2])
 
@@ -90,10 +89,10 @@ def debug_overlay():
             3
         )
 
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    cv2.imwrite(temp_file.name, overlay)
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    cv2.imwrite(temp.name, overlay)
 
-    return send_file(temp_file.name, mimetype="image/png")
+    return send_file(temp.name, mimetype="image/png")
 
 
 @app.route("/v1/analyze", methods=["POST"])
