@@ -6,7 +6,7 @@ import cv2
 import hashlib
 import base64
 
-# NEW ROUTER IMPORT
+# router import
 from parser.router import choose_parser
 
 app = Flask(name)
@@ -41,15 +41,15 @@ def find_first_nonwhite_row(img):
 
 
 # -------------------------------------------------------
-# FIND RISK BARS (EXISTING HSV LOGIC)
+# HSV BAR DETECTION
 # -------------------------------------------------------
 
 def detect_bar_color(region):
 
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
-    lower = np.array([70,50,50])
-    upper = np.array([170,255,255])
+    lower = np.array([70, 50, 50])
+    upper = np.array([170, 255, 255])
 
     mask = cv2.inRange(hsv, lower, upper)
 
@@ -66,31 +66,30 @@ def detect_bar_color(region):
 def debug_overlay():
 
     if not require_auth(request):
-        return jsonify({"error":"unauthorized"}), 401
+        return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error":"no file"}), 400
+        return jsonify({"error": "no file"}), 400
 
     pdf_bytes = request.files["file"].read()
 
     images = convert_from_bytes(pdf_bytes)
 
     if len(images) < 2:
-        return jsonify({"error":"page 2 missing"}), 400
+        return jsonify({"error": "page 2 missing"}), 400
 
     img = np.array(images[1])
 
-    # ---------------------------------------------------
-    # NEW: ROUTER DETECTION
-    # ---------------------------------------------------
+    # ----------------------------------------------
+    # ROUTER DETECTION
+    # ----------------------------------------------
 
     parser_choice = choose_parser(img)
-
     print("Detected parser:", parser_choice)
 
-    # ---------------------------------------------------
+    # ----------------------------------------------
     # EXISTING DEBUG OVERLAY LOGIC
-    # ---------------------------------------------------
+    # ----------------------------------------------
 
     h, w, _ = img.shape
 
@@ -101,14 +100,14 @@ def debug_overlay():
 
     for y in range(500, 2000, 40):
 
-        region = img[y:y+40, BAR_X:BAR_X+BAR_WIDTH]
+        region = img[y:y+40, BAR_X:BAR_X + BAR_WIDTH]
 
         if region.size == 0:
             continue
 
         detected = detect_bar_color(region)
 
-        color = (0,255,0) if detected else (0,0,255)
+        color = (0, 255, 0) if detected else (0, 0, 255)
 
         cv2.rectangle(
             overlay,
@@ -133,10 +132,10 @@ def debug_overlay():
 def pdf_metadata():
 
     if not require_auth(request):
-        return jsonify({"error":"unauthorized"}), 401
+        return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error":"no file"}), 400
+        return jsonify({"error": "no file"}), 400
 
     pdf_bytes = request.files["file"].read()
 
@@ -144,7 +143,7 @@ def pdf_metadata():
 
     page = np.array(images[1])
 
-    small = cv2.resize(page, (200,200))
+    small = cv2.resize(page, (200, 200))
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
