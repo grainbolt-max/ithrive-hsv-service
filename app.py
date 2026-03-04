@@ -1,22 +1,26 @@
-from flask import Flask, request, jsonify, send_file
-from pdf2image import convert_from_bytes
-import numpy as np
-import cv2
-import os
+from flask import Flask, request, jsonify, send_file  
+from pdf2image import convert_from_bytes  
+import numpy as np  
+import cv2  
+import os  
 
-app = Flask(__name__)
+app = Flask(name)
 
 API_KEY = "ithrive_secure_2026_key"
 
 # ======================================
-# HARDCODED STRIPE POSITION (FIXED)
+# REFERENCE PAGE SIZE (FROM METADATA)
 # ======================================
 
-# These are now aligned with the actual disease bars
-X_LEFT = 950
-X_RIGHT = 1250
+REF_WIDTH = 1700  
+REF_HEIGHT = 2200  
 
-DISEASE_ROWS = [
+# Stripe location in reference layout
+REF_X_LEFT = 950  
+REF_X_RIGHT = 1250  
+
+# Disease row coordinates in reference layout
+REF_DISEASE_ROWS = [
     (689, 709),
     (714, 734),
     (739, 759),
@@ -43,6 +47,9 @@ DISEASE_ROWS = [
     (1425, 1445)
 ]
 
+# ======================================
+# AUTH
+# ======================================
 
 def require_auth(req):
     auth_header = req.headers.get("Authorization", "")
@@ -53,11 +60,35 @@ def require_auth(req):
 
 
 # ======================================
-# DEBUG OVERLAY — HARD CODED
+# SCALE COORDINATES
+# ======================================
+
+def scale_coordinates(page_width, page_height):
+
+    scale_x = page_width / REF_WIDTH
+    scale_y = page_height / REF_HEIGHT
+
+    x_left = int(REF_X_LEFT * scale_x)
+    x_right = int(REF_X_RIGHT * scale_x)
+
+    rows = []
+
+    for y1, y2 in REF_DISEASE_ROWS:
+        rows.append((
+            int(y1 * scale_y),
+            int(y2 * scale_y)
+        ))
+
+    return x_left, x_right, rows
+
+
+# ======================================
+# DEBUG OVERLAY
 # ======================================
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
+
     if not require_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -74,24 +105,29 @@ def debug_overlay():
 
     page = np.array(images[1])
 
-    for (y1, y2) in DISEASE_ROWS:
-        cv2.rectangle(page, (X_LEFT, y1), (X_RIGHT, y2), (0, 0, 255), 3)
+    page_height, page_width = page.shape[:2]
+
+    x_left, x_right, rows = scale_coordinates(page_width, page_height)
+
+    for y1, y2 in rows:
+        cv2.rectangle(page, (x_left, y1), (x_right, y2), (0, 0, 255), 3)
 
     output_path = "/tmp/debug_overlay.png"
+
     cv2.imwrite(output_path, page)
 
     return send_file(output_path, mimetype="image/png")
 
 
 # ======================================
-# HEALTH CHECK
+# HEALTH
 # ======================================
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "HSV SERVICE RUNNING"})
+    return jsonify({"status": "ITHRIVE HSV Service Running"})
 
 
-if __name__ == "__main__":
+if name == "main":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
