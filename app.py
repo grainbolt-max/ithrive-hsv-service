@@ -9,57 +9,88 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# ------------------------------------------------------------------
-# CURRENT BAR LOCATION (WE WILL VERIFY WITH COORDINATES)
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# CURRENT TEST COORDINATES
+# --------------------------------------------------
 
-TEMPLATE_BAR_X = 1120
-TEMPLATE_BAR_Y = 420
+TEMPLATE_BAR_X = 900
+TEMPLATE_BAR_Y = 540
 
 BAR_WIDTH = 340
 ROW_HEIGHT = 42
 TOTAL_ROWS = 22
 
-# ------------------------------------------------------------------
+
+# --------------------------------------------------
 # AUTH
-# ------------------------------------------------------------------
+# --------------------------------------------------
 
 def require_auth(req):
-    auth_header = req.headers.get("Authorization","")
+
+    auth_header = req.headers.get("Authorization", "")
+
     if not auth_header.startswith("Bearer "):
         return False
+
     token = auth_header.split("Bearer ")[1].strip()
+
     return token == API_KEY
 
 
-# ------------------------------------------------------------------
-# DRAW GRID FOR PIXEL COORDINATES
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# DRAW BIG COORDINATE GRID
+# --------------------------------------------------
 
 def draw_coordinate_grid(img):
 
     h, w = img.shape[:2]
 
-    step = 100
+    for x in range(0, w, 200):
 
-    for x in range(0, w, step):
-        cv2.line(img,(x,0),(x,h),(200,200,200),1)
-        cv2.putText(img,str(x),(x+5,30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,(0,0,255),2)
+        cv2.line(img, (x,0), (x,h), (180,180,180), 2)
 
-    for y in range(0, h, step):
-        cv2.line(img,(0,y),(w,y),(200,200,200),1)
-        cv2.putText(img,str(y),(5,y+25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,(0,0,255),2)
+        cv2.putText(
+            img,
+            f"X={x}",
+            (x+5,60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0,0,255),
+            3
+        )
+
+    for y in range(0, h, 200):
+
+        cv2.line(img, (0,y), (w,y), (180,180,180), 2)
+
+        cv2.putText(
+            img,
+            f"Y={y}",
+            (20,y+40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0,0,255),
+            3
+        )
 
     return img
 
 
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# DRAW CROSSHAIR AT RECTANGLE START
+# --------------------------------------------------
+
+def draw_crosshair(img,x,y):
+
+    cv2.line(img,(x-20,y),(x+20,y),(0,255,0),3)
+    cv2.line(img,(x,y-20),(x,y+20),(0,255,0),3)
+
+    return img
+
+
+# --------------------------------------------------
 # DEBUG OVERLAY
-# ------------------------------------------------------------------
+# --------------------------------------------------
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
@@ -93,16 +124,18 @@ def debug_overlay():
             3
         )
 
-        label = f"{x},{y}"
+        overlay = draw_crosshair(overlay,x,y)
+
+        label = f"({x},{y})"
 
         cv2.putText(
             overlay,
             label,
-            (x,y-5),
+            (x+10,y-10),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+            1,
             (255,0,0),
-            2
+            3
         )
 
     _, buffer = cv2.imencode(".png",overlay)
@@ -113,18 +146,18 @@ def debug_overlay():
     )
 
 
-# ------------------------------------------------------------------
-# HEALTH CHECK
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# HEALTH
+# --------------------------------------------------
 
 @app.route("/",methods=["GET"])
 def health():
     return jsonify({"status":"ITHRIVE parser running"})
 
 
-# ------------------------------------------------------------------
-# START SERVER
-# ------------------------------------------------------------------
+# --------------------------------------------------
+# SERVER START
+# --------------------------------------------------
 
 if __name__ == "__main__":
 
