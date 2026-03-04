@@ -2,9 +2,9 @@ from flask import Flask, request, jsonify, send_file
 from pdf2image import convert_from_bytes
 import numpy as np
 import cv2
+import io
 import hashlib
 import base64
-import io
 import os
 
 app = Flask(__name__)
@@ -25,26 +25,26 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# AUTO CROP PAGE (removes huge white margins)
+# REMOVE SCANNER MARGIN
 # ----------------------------------------------------
 
 def autocrop_page(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    mask = gray < 250
+    h, w = gray.shape
 
-    coords = np.column_stack(np.where(mask))
+    for y in range(h):
 
-    if coords.size == 0:
-        return img
+        row = gray[y:y+1, :]
 
-    y0, x0 = coords.min(axis=0)
-    y1, x1 = coords.max(axis=0)
+        dark_ratio = np.mean(row < 230)
 
-    cropped = img[y0:y1, x0:x1]
+        if dark_ratio > 0.02:
+            top = max(0, y - 20)
+            return img[top:h, :]
 
-    return cropped
+    return img
 
 
 # ----------------------------------------------------
@@ -74,6 +74,7 @@ def register_to_template(page):
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
     matches = matcher.match(des1, des2)
+
     matches = sorted(matches, key=lambda x: x.distance)
 
     if len(matches) < 10:
@@ -102,10 +103,45 @@ def register_to_template(page):
 
 
 # ----------------------------------------------------
+# FIND ROWS AUTOMATICALLY
+# ----------------------------------------------------
+
+def detect_rows(img):
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    edges = cv2.Canny(gray, 50, 150)
+
+    horizontal = cv2.reduce(edges, 1, cv2.REDUCE_AVG)
+
+    rows = []
+
+    threshold = 10
+
+    start = None
+
+    for y, val in enumerate(horizontal):
+
+        if val > threshold and start is None:
+            start = y
+
+        elif val <= threshold and start is not None:
+
+            height = y - start
+
+            if height > 25 and height < 80:
+                rows.append((start, height))
+
+            start = None
+
+    return rows
+
+
+# ----------------------------------------------------
 # HSV COLOR DETECTION
 # ----------------------------------------------------
 
-def detect_color_presence(region):
+def detect_bar_color(region):
 
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
@@ -114,51 +150,17 @@ def detect_color_presence(region):
 
     mask = cv2.inRange(hsv, lower, upper)
 
-    return cv2.countNonZero(mask) > 200
+    pixels = cv2.countNonZero(mask)
+
+    return pixels > 200
 
 
 # ----------------------------------------------------
-# BAR COLUMN LOCATION (from calibration)
+# BAR COLUMN (CALIBRATED)
 # ----------------------------------------------------
 
 BAR_X = 1120
 BAR_WIDTH = 340
-
-
-# ----------------------------------------------------
-# ROW LAYOUT
-# ----------------------------------------------------
-
-BASE_LAYOUT = {
-
-    "large_artery_stiffness": {"y":750,"h":42},
-    "peripheral_vessel": {"y":792,"h":42},
-    "blood_pressure_uncontrolled": {"y":834,"h":42},
-    "small_medium_artery": {"y":876,"h":42},
-    "atherosclerosis": {"y":918,"h":42},
-    "ldl_cholesterol": {"y":960,"h":42},
-    "lv_hypertrophy": {"y":1002,"h":42},
-
-    "metabolic_syndrome": {"y":1080,"h":42},
-    "insulin_resistance": {"y":1122,"h":42},
-    "beta_cell_function": {"y":1164,"h":42},
-    "blood_glucose": {"y":1206,"h":42},
-    "tissue_inflammation": {"y":1248,"h":42},
-
-    "hypothyroidism": {"y":520,"h":42},
-    "hyperthyroidism": {"y":562,"h":42},
-    "hepatic_fibrosis": {"y":604,"h":42},
-    "chronic_hepatitis": {"y":646,"h":42},
-
-    "respiratory_disorders": {"y":726,"h":42},
-    "kidney_function": {"y":768,"h":42},
-    "digestive_disorders": {"y":810,"h":42},
-
-    "major_depression": {"y":920,"h":42},
-    "adhd_learning": {"y":962,"h":42},
-    "dopamine_decrease": {"y":1004,"h":42},
-    "serotonin_decrease": {"y":1046,"h":42},
-}
 
 
 # ----------------------------------------------------
@@ -180,6 +182,7 @@ def pdf_metadata():
     h,w = first_page.shape[:2]
 
     small = cv2.resize(first_page,(200,200))
+
     gray = cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
 
     sha = hashlib.sha256(gray.tobytes()).digest()
@@ -196,7 +199,7 @@ def pdf_metadata():
 
 
 # ----------------------------------------------------
-# DISEASE DETECTION
+# DETECT DISEASE BARS
 # ----------------------------------------------------
 
 @app.route("/v1/detect-disease-bars", methods=["POST"])
@@ -209,28 +212,30 @@ def detect_disease_bars():
 
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = autocrop_page(np.array(images[1]))
+    page = np.array(images[1])
+
+    page = autocrop_page(page)
 
     page = register_to_template(page)
 
+    rows = detect_rows(page)
+
     results = {}
 
-    for disease,coords in BASE_LAYOUT.items():
-
-        y = coords["y"]
-        h = coords["h"]
+    for i,(y,h) in enumerate(rows):
 
         region = page[y:y+h, BAR_X:BAR_X+BAR_WIDTH]
 
         if region.size == 0:
             continue
 
-        has_color = detect_color_presence(region)
+        has_color = detect_bar_color(region)
 
-        results[disease] = "Moderate" if has_color else "None/Low"
+        results[f"row_{i}"] = "Moderate" if has_color else "None/Low"
 
     return jsonify({
-        "engine":"ithrive_hsv_template_locked",
+        "engine":"ithrive_row_detection_engine",
+        "rows_detected":len(rows),
         "results":results
     })
 
@@ -249,16 +254,17 @@ def debug_overlay():
 
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    page = autocrop_page(np.array(images[1]))
+    page = np.array(images[1])
+
+    page = autocrop_page(page)
 
     page = register_to_template(page)
 
+    rows = detect_rows(page)
+
     overlay = page.copy()
 
-    for disease,coords in BASE_LAYOUT.items():
-
-        y = coords["y"]
-        h = coords["h"]
+    for y,h in rows:
 
         cv2.rectangle(
             overlay,
@@ -277,7 +283,7 @@ def debug_overlay():
 
 
 # ----------------------------------------------------
-# HEALTH CHECK
+# HEALTH
 # ----------------------------------------------------
 
 @app.route("/", methods=["GET"])
