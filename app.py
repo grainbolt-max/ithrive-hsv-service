@@ -1,294 +1,142 @@
 from flask import Flask, request, jsonify, send_file
-from pdf2image import convert_from_bytes
 import numpy as np
 import cv2
-import io
-import hashlib
-import base64
+from pdf2image import convert_from_bytes
+import tempfile
 import os
 
 app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
+BASE_LAYOUT = {
 
-# ----------------------------------------------------
-# AUTH
-# ----------------------------------------------------
+    # PAGE 2
+    "large_artery_stiffness": {"x": 1040, "y": 750, "w": 520, "h": 42},
+    "peripheral_vessel": {"x": 1040, "y": 792, "w": 520, "h": 42},
+    "blood_pressure_uncontrolled": {"x": 1040, "y": 834, "w": 520, "h": 42},
+    "small_medium_artery": {"x": 1040, "y": 876, "w": 520, "h": 42},
+    "atherosclerosis": {"x": 1040, "y": 918, "w": 520, "h": 42},
+    "ldl_cholesterol": {"x": 1040, "y": 960, "w": 520, "h": 42},
+    "lv_hypertrophy": {"x": 1040, "y": 1002, "w": 520, "h": 42},
 
-def require_auth(req):
-    auth_header = req.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    "metabolic_syndrome": {"x": 1040, "y": 1080, "w": 520, "h": 42},
+    "insulin_resistance": {"x": 1040, "y": 1122, "w": 520, "h": 42},
+    "beta_cell_function": {"x": 1040, "y": 1164, "w": 520, "h": 42},
+    "blood_glucose": {"x": 1040, "y": 1206, "w": 520, "h": 42},
+    "tissue_inflammation": {"x": 1040, "y": 1248, "w": 520, "h": 42},
+
+    # PAGE 3
+    "hypothyroidism": {"x": 1040, "y": 520, "w": 520, "h": 42},
+    "hyperthyroidism": {"x": 1040, "y": 562, "w": 520, "h": 42},
+    "hepatic_fibrosis": {"x": 1040, "y": 604, "w": 520, "h": 42},
+    "chronic_hepatitis": {"x": 1040, "y": 646, "w": 520, "h": 42},
+
+    "respiratory_disorders": {"x": 1040, "y": 726, "w": 520, "h": 42},
+    "kidney_function": {"x": 1040, "y": 768, "w": 520, "h": 42},
+    "digestive_disorders": {"x": 1040, "y": 810, "w": 520, "h": 42},
+
+    "major_depression": {"x": 1040, "y": 920, "w": 520, "h": 42},
+    "adhd_learning": {"x": 1040, "y": 962, "w": 520, "h": 42},
+    "dopamine_decrease": {"x": 1040, "y": 1004, "w": 520, "h": 42},
+    "serotonin_decrease": {"x": 1040, "y": 1046, "w": 520, "h": 42},
+}
+
+
+def check_auth(req):
+    auth = req.headers.get("Authorization", "")
+    if auth != f"Bearer {API_KEY}":
         return False
-    token = auth_header.split("Bearer ")[1].strip()
-    return token == API_KEY
+    return True
 
 
-# ----------------------------------------------------
-# REMOVE SCANNER MARGIN
-# ----------------------------------------------------
+@app.route("/")
+def home():
+    return jsonify({"status": "ITHRIVE HSV Service Running"})
 
-def autocrop_page(img):
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    h, w = gray.shape
-
-    for y in range(h):
-
-        row = gray[y:y+1, :]
-
-        dark_ratio = np.mean(row < 230)
-
-        if dark_ratio > 0.02:
-            top = max(0, y - 20)
-            return img[top:h, :]
-
-    return img
-
-
-# ----------------------------------------------------
-# TEMPLATE ALIGNMENT
-# ----------------------------------------------------
-
-def register_to_template(page):
-
-    template_path = "page2_template.png"
-
-    if not os.path.exists(template_path):
-        return page
-
-    template = cv2.imread(template_path)
-
-    gray1 = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
-    orb = cv2.ORB_create(5000)
-
-    kp1, des1 = orb.detectAndCompute(gray1, None)
-    kp2, des2 = orb.detectAndCompute(gray2, None)
-
-    if des1 is None or des2 is None:
-        return page
-
-    matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-    matches = matcher.match(des1, des2)
-
-    matches = sorted(matches, key=lambda x: x.distance)
-
-    if len(matches) < 10:
-        return page
-
-    src_pts = np.float32(
-        [kp1[m.queryIdx].pt for m in matches[:50]]
-    ).reshape(-1,1,2)
-
-    dst_pts = np.float32(
-        [kp2[m.trainIdx].pt for m in matches[:50]]
-    ).reshape(-1,1,2)
-
-    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
-
-    if M is None:
-        return page
-
-    aligned = cv2.warpAffine(
-        page,
-        M,
-        (template.shape[1], template.shape[0])
-    )
-
-    return aligned
-
-
-# ----------------------------------------------------
-# FIND ROWS AUTOMATICALLY
-# ----------------------------------------------------
-
-def detect_rows(img):
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    edges = cv2.Canny(gray, 50, 150)
-
-    horizontal = cv2.reduce(edges, 1, cv2.REDUCE_AVG)
-
-    rows = []
-
-    threshold = 10
-
-    start = None
-
-    for y, val in enumerate(horizontal):
-
-        if val > threshold and start is None:
-            start = y
-
-        elif val <= threshold and start is not None:
-
-            height = y - start
-
-            if height > 25 and height < 80:
-                rows.append((start, height))
-
-            start = None
-
-    return rows
-
-
-# ----------------------------------------------------
-# HSV COLOR DETECTION
-# ----------------------------------------------------
-
-def detect_bar_color(region):
-
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-
-    lower = np.array([70,50,50])
-    upper = np.array([170,255,255])
-
-    mask = cv2.inRange(hsv, lower, upper)
-
-    pixels = cv2.countNonZero(mask)
-
-    return pixels > 200
-
-
-# ----------------------------------------------------
-# BAR COLUMN (CALIBRATED)
-# ----------------------------------------------------
-
-BAR_X = 1120
-BAR_WIDTH = 340
-
-
-# ----------------------------------------------------
-# PDF METADATA
-# ----------------------------------------------------
-
-@app.route("/v1/pdf-metadata", methods=["POST"])
-def pdf_metadata():
-
-    if not require_auth(request):
-        return jsonify({"error":"Unauthorized"}),401
-
-    pdf_bytes = request.files["file"].read()
-
-    images = convert_from_bytes(pdf_bytes, dpi=200)
-
-    first_page = np.array(images[0])
-
-    h,w = first_page.shape[:2]
-
-    small = cv2.resize(first_page,(200,200))
-
-    gray = cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
-
-    sha = hashlib.sha256(gray.tobytes()).digest()
-
-    pixel_hash = base64.b64encode(sha).decode("utf-8")
-
-    return jsonify({
-        "page_width":w,
-        "page_height":h,
-        "file_size":len(pdf_bytes),
-        "page_count":len(images),
-        "pixel_hash_b64":pixel_hash
-    })
-
-
-# ----------------------------------------------------
-# DETECT DISEASE BARS
-# ----------------------------------------------------
-
-@app.route("/v1/detect-disease-bars", methods=["POST"])
-def detect_disease_bars():
-
-    if not require_auth(request):
-        return jsonify({"error":"Unauthorized"}),401
-
-    pdf_bytes = request.files["file"].read()
-
-    images = convert_from_bytes(pdf_bytes, dpi=200)
-
-    page = np.array(images[1])
-
-    page = autocrop_page(page)
-
-    page = register_to_template(page)
-
-    rows = detect_rows(page)
-
-    results = {}
-
-    for i,(y,h) in enumerate(rows):
-
-        region = page[y:y+h, BAR_X:BAR_X+BAR_WIDTH]
-
-        if region.size == 0:
-            continue
-
-        has_color = detect_bar_color(region)
-
-        results[f"row_{i}"] = "Moderate" if has_color else "None/Low"
-
-    return jsonify({
-        "engine":"ithrive_row_detection_engine",
-        "rows_detected":len(rows),
-        "results":results
-    })
-
-
-# ----------------------------------------------------
-# DEBUG OVERLAY
-# ----------------------------------------------------
 
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
 
-    if not require_auth(request):
-        return jsonify({"error":"Unauthorized"}),401
+    if not check_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
 
-    pdf_bytes = request.files["file"].read()
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
 
-    images = convert_from_bytes(pdf_bytes, dpi=200)
+    file_bytes = request.files["file"].read()
 
-    page = np.array(images[1])
+    pages = convert_from_bytes(file_bytes, dpi=300)
 
-    page = autocrop_page(page)
+    # combine page2 + page3 vertically for debug
+    page2 = np.array(pages[1])
+    page3 = np.array(pages[2])
 
-    page = register_to_template(page)
+    combined = np.vstack((page2, page3))
+    overlay = combined.copy()
 
-    rows = detect_rows(page)
+    for name, box in BASE_LAYOUT.items():
 
-    overlay = page.copy()
-
-    for y,h in rows:
+        x = box["x"]
+        y = box["y"]
+        w = box["w"]
+        h = box["h"]
 
         cv2.rectangle(
             overlay,
-            (BAR_X,y),
-            (BAR_X+BAR_WIDTH,y+h),
-            (0,0,255),
-            2
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),
+            3
         )
 
-    _,buffer = cv2.imencode(".png",overlay)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    cv2.imwrite(temp_file.name, overlay)
 
-    return send_file(
-        io.BytesIO(buffer.tobytes()),
-        mimetype="image/png"
-    )
+    return send_file(temp_file.name, mimetype="image/png")
 
 
-# ----------------------------------------------------
-# HEALTH
-# ----------------------------------------------------
+@app.route("/v1/analyze", methods=["POST"])
+def analyze():
 
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status":"ITHRIVE HSV Service Running"})
+    if not check_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file_bytes = request.files["file"].read()
+
+    pages = convert_from_bytes(file_bytes, dpi=300)
+
+    page2 = np.array(pages[1])
+    page3 = np.array(pages[2])
+
+    combined = np.vstack((page2, page3))
+
+    results = {}
+
+    for name, box in BASE_LAYOUT.items():
+
+        x = box["x"]
+        y = box["y"]
+        w = box["w"]
+        h = box["h"]
+
+        crop = combined[y:y+h, x:x+w]
+
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+        lower_blue = np.array([90, 50, 50])
+        upper_blue = np.array([140, 255, 255])
+
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        ratio = np.sum(mask > 0) / (w * h)
+
+        results[name] = round(float(ratio), 3)
+
+    return jsonify(results)
 
 
 if __name__ == "__main__":
