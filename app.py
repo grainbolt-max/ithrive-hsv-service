@@ -10,7 +10,6 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# Known canonical fingerprint
 CANONICAL_HASH = "YlLY455AeeVlZXU8xGy1yd04QIomu+5OyCOaFw+8oHg="
 
 
@@ -23,9 +22,9 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# STABLE PANEL ANCHOR (GRAY HEADER DETECTION)
+# DUAL ANCHOR DETECTION (Cardio + Diabetes)
 # ----------------------------------------------------
-def find_panel_anchor(img):
+def find_panel_anchors(img):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -38,17 +37,22 @@ def find_panel_anchor(img):
 
     search_start = int(img.shape[0] * 0.15)
 
-    anchor_y = search_start + np.argmax(row_strength[search_start:])
+    rows = row_strength[search_start:]
 
-    return anchor_y
+    peaks = np.argsort(rows)[-5:]
+    peaks = sorted(peaks)
+
+    cardio_anchor = search_start + peaks[0]
+    diabetes_anchor = search_start + peaks[2]
+
+    return cardio_anchor, diabetes_anchor
 
 
 # ----------------------------------------------------
-# LAYOUT OFFSETS (relative to anchor)
+# LAYOUT OFFSETS
 # ----------------------------------------------------
 BASE_LAYOUT = {
 
-    # PAGE 2
     "large_artery_stiffness": {"x": 1040, "y": 130, "w": 520, "h": 42},
     "peripheral_vessel": {"x": 1040, "y": 172, "w": 520, "h": 42},
     "blood_pressure_uncontrolled": {"x": 1040, "y": 214, "w": 520, "h": 42},
@@ -63,20 +67,19 @@ BASE_LAYOUT = {
     "blood_glucose": {"x": 1040, "y": 586, "w": 520, "h": 42},
     "tissue_inflammation": {"x": 1040, "y": 628, "w": 520, "h": 42},
 
-    # PAGE 3
-    "hypothyroidism": {"x": 1040, "y": -100, "w": 520, "h": 42},
-    "hyperthyroidism": {"x": 1040, "y": -58, "w": 520, "h": 42},
-    "hepatic_fibrosis": {"x": 1040, "y": -16, "w": 520, "h": 42},
-    "chronic_hepatitis": {"x": 1040, "y": 26, "w": 520, "h": 42},
+    "hypothyroidism": {"x": 1040, "y": 700, "w": 520, "h": 42},
+    "hyperthyroidism": {"x": 1040, "y": 742, "w": 520, "h": 42},
+    "hepatic_fibrosis": {"x": 1040, "y": 784, "w": 520, "h": 42},
+    "chronic_hepatitis": {"x": 1040, "y": 826, "w": 520, "h": 42},
 
-    "respiratory_disorders": {"x": 1040, "y": 106, "w": 520, "h": 42},
-    "kidney_function": {"x": 1040, "y": 148, "w": 520, "h": 42},
-    "digestive_disorders": {"x": 1040, "y": 190, "w": 520, "h": 42},
+    "respiratory_disorders": {"x": 1040, "y": 906, "w": 520, "h": 42},
+    "kidney_function": {"x": 1040, "y": 948, "w": 520, "h": 42},
+    "digestive_disorders": {"x": 1040, "y": 990, "w": 520, "h": 42},
 
-    "major_depression": {"x": 1040, "y": 300, "w": 520, "h": 42},
-    "adhd_learning": {"x": 1040, "y": 342, "w": 520, "h": 42},
-    "dopamine_decrease": {"x": 1040, "y": 384, "w": 520, "h": 42},
-    "serotonin_decrease": {"x": 1040, "y": 426, "w": 520, "h": 42},
+    "major_depression": {"x": 1040, "y": 1100, "w": 520, "h": 42},
+    "adhd_learning": {"x": 1040, "y": 1142, "w": 520, "h": 42},
+    "dopamine_decrease": {"x": 1040, "y": 1184, "w": 520, "h": 42},
+    "serotonin_decrease": {"x": 1040, "y": 1226, "w": 520, "h": 42},
 }
 
 
@@ -101,7 +104,6 @@ def pdf_metadata():
     page_height, page_width = first_page.shape[:2]
 
     small = cv2.resize(first_page, (200, 200))
-
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
     sha = hashlib.sha256(gray.tobytes()).digest()
@@ -135,14 +137,20 @@ def debug_overlay():
 
     page = np.array(images[1])
 
-    anchor_y = find_panel_anchor(page)
+    cardio_anchor, diabetes_anchor = find_panel_anchors(page)
 
     overlay = page.copy()
 
     for disease, coords in BASE_LAYOUT.items():
 
         x = coords["x"]
-        y = anchor_y + coords["y"]
+        offset_y = coords["y"]
+
+        if offset_y < 450:
+            y = cardio_anchor + offset_y
+        else:
+            y = diabetes_anchor + (offset_y - 450)
+
         w = coords["w"]
         h = coords["h"]
 
