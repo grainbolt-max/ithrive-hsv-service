@@ -6,50 +6,48 @@ import io
 import os
 
 # ============================================================
-# APP INIT
+# CONFIG
 # ============================================================
-
-app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# ============================================================
-# TEMPLATE CONFIGURATION
-# ============================================================
+TEMPLATE_PATH = "page2_template.png"
 
-# Template image used to anchor alignment
-TEMPLATE_FILE = "page2_template.png"
-
-# Coordinates measured from the template image itself
-# These correspond to the first disease score bar row
-TEMPLATE_BAR_X = 980
-TEMPLATE_BAR_Y = 420
-
-BAR_WIDTH = 320
 ROW_HEIGHT = 42
 TOTAL_ROWS = 22
+BAR_WIDTH = 340
+
+# ============================================================
+# APP
+# ============================================================
+
+app = Flask(__name__)
 
 # ============================================================
 # AUTH
 # ============================================================
 
 def require_auth(req):
-    auth = req.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
+
+    auth_header = req.headers.get("Authorization", "")
+
+    if not auth_header.startswith("Bearer "):
         return False
-    token = auth.split("Bearer ")[1].strip()
+
+    token = auth_header.split("Bearer ")[1].strip()
+
     return token == API_KEY
 
 
 # ============================================================
-# TEMPLATE MATCHING
+# TEMPLATE ALIGNMENT
 # ============================================================
 
-def find_template_offset(page_img):
+def find_template_offset(page):
 
-    template = cv2.imread(TEMPLATE_FILE)
+    template = cv2.imread(TEMPLATE_PATH)
 
-    page_gray = cv2.cvtColor(page_img, cv2.COLOR_BGR2GRAY)
+    page_gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 
     result = cv2.matchTemplate(page_gray, template_gray, cv2.TM_CCOEFF_NORMED)
@@ -63,7 +61,45 @@ def find_template_offset(page_img):
 
 
 # ============================================================
-# DEBUG OVERLAY ENDPOINT
+# AUTO DETECT BAR COLUMN
+# ============================================================
+
+def detect_bar_column(template):
+
+    hsv = cv2.cvtColor(template, cv2.COLOR_BGR2HSV)
+
+    # detect the cyan/blue score bars
+    lower = np.array([70, 40, 40])
+    upper = np.array([140, 255, 255])
+
+    mask = cv2.inRange(hsv, lower, upper)
+
+    projection = np.sum(mask, axis=0)
+
+    bar_x = np.argmax(projection)
+
+    return bar_x
+
+
+# ============================================================
+# AUTO DETECT FIRST ROW
+# ============================================================
+
+def detect_first_row(template):
+
+    gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+    edges = cv2.Canny(gray, 50, 150)
+
+    projection = np.sum(edges, axis=1)
+
+    first_row = np.argmax(projection)
+
+    return first_row
+
+
+# ============================================================
+# DEBUG OVERLAY
 # ============================================================
 
 @app.route("/v1/debug-overlay", methods=["POST"])
@@ -81,14 +117,20 @@ def debug_overlay():
 
     page = np.array(pages[1])
 
+    template = cv2.imread(TEMPLATE_PATH)
+
     offset_x, offset_y = find_template_offset(page)
+
+    bar_x_template = detect_bar_column(template)
+
+    row_y_template = detect_first_row(template)
 
     overlay = page.copy()
 
     for i in range(TOTAL_ROWS):
 
-        x = TEMPLATE_BAR_X + offset_x
-        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
+        x = offset_x + bar_x_template
+        y = offset_y + row_y_template + (i * ROW_HEIGHT)
 
         cv2.rectangle(
             overlay,
@@ -107,7 +149,7 @@ def debug_overlay():
 
 
 # ============================================================
-# SCORE EXTRACTION
+# EXTRACT SCORES
 # ============================================================
 
 @app.route("/v1/extract", methods=["POST"])
@@ -125,21 +167,27 @@ def extract():
 
     page = np.array(pages[1])
 
+    template = cv2.imread(TEMPLATE_PATH)
+
     offset_x, offset_y = find_template_offset(page)
+
+    bar_x_template = detect_bar_column(template)
+
+    row_y_template = detect_first_row(template)
 
     scores = []
 
     for i in range(TOTAL_ROWS):
 
-        x = TEMPLATE_BAR_X + offset_x
-        y = TEMPLATE_BAR_Y + offset_y + (i * ROW_HEIGHT)
+        x = offset_x + bar_x_template
+        y = offset_y + row_y_template + (i * ROW_HEIGHT)
 
         region = page[y:y+ROW_HEIGHT, x:x+BAR_WIDTH]
 
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
-        lower = np.array([70, 50, 50])
-        upper = np.array([170, 255, 255])
+        lower = np.array([70, 40, 40])
+        upper = np.array([140, 255, 255])
 
         mask = cv2.inRange(hsv, lower, upper)
 
@@ -150,7 +198,7 @@ def extract():
         scores.append(score)
 
     return jsonify({
-        "engine": "template_anchor_v2",
+        "engine": "template_locked_parser_v1",
         "scores": scores
     })
 
@@ -159,13 +207,16 @@ def extract():
 # HEALTH CHECK
 # ============================================================
 
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({"status": "ITHRIVE HSV Service Running"})
+@app.route("/")
+def health():
+
+    return jsonify({
+        "status": "ITHRIVE HSV parser running"
+    })
 
 
 # ============================================================
-# SERVER START
+# START SERVER
 # ============================================================
 
 if __name__ == "__main__":
