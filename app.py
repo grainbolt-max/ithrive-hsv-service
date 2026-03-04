@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# Canonical PDF fingerprint (your known matched layout)
+# Known canonical fingerprint
 CANONICAL_HASH = "YlLY455AeeVlZXU8xGy1yd04QIomu+5OyCOaFw+8oHg="
 
 
@@ -23,31 +23,32 @@ def require_auth(req):
 
 
 # ----------------------------------------------------
-# Anchor Detection (prevents layout drift permanently)
+# STABLE PANEL ANCHOR (GRAY HEADER DETECTION)
 # ----------------------------------------------------
 def find_panel_anchor(img):
-    """
-    Detects the gray disease panel header automatically.
-    Returns Y coordinate used as layout anchor.
-    """
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    edges = cv2.Canny(gray, 50, 150)
+    lower = np.array([0, 0, 80])
+    upper = np.array([180, 40, 140])
 
-    horizontal_strength = np.sum(edges, axis=1)
+    mask = cv2.inRange(hsv, lower, upper)
 
-    anchor_y = int(np.argmax(horizontal_strength))
+    row_strength = np.sum(mask, axis=1)
+
+    search_start = int(img.shape[0] * 0.15)
+
+    anchor_y = search_start + np.argmax(row_strength[search_start:])
 
     return anchor_y
 
 
 # ----------------------------------------------------
-# Layout offsets (relative to anchor)
+# LAYOUT OFFSETS (relative to anchor)
 # ----------------------------------------------------
 BASE_LAYOUT = {
 
-    # PAGE 2 – CARDIO / DIABETES
+    # PAGE 2
     "large_artery_stiffness": {"x": 1040, "y": 130, "w": 520, "h": 42},
     "peripheral_vessel": {"x": 1040, "y": 172, "w": 520, "h": 42},
     "blood_pressure_uncontrolled": {"x": 1040, "y": 214, "w": 520, "h": 42},
@@ -62,7 +63,7 @@ BASE_LAYOUT = {
     "blood_glucose": {"x": 1040, "y": 586, "w": 520, "h": 42},
     "tissue_inflammation": {"x": 1040, "y": 628, "w": 520, "h": 42},
 
-    # PAGE 3 – MISC DISEASES
+    # PAGE 3
     "hypothyroidism": {"x": 1040, "y": -100, "w": 520, "h": 42},
     "hyperthyroidism": {"x": 1040, "y": -58, "w": 520, "h": 42},
     "hepatic_fibrosis": {"x": 1040, "y": -16, "w": 520, "h": 42},
@@ -80,7 +81,7 @@ BASE_LAYOUT = {
 
 
 # ----------------------------------------------------
-# PDF Metadata Endpoint
+# PDF METADATA
 # ----------------------------------------------------
 @app.route("/v1/pdf-metadata", methods=["POST"])
 def pdf_metadata():
@@ -117,7 +118,7 @@ def pdf_metadata():
 
 
 # ----------------------------------------------------
-# Debug Overlay (shows layout boxes)
+# DEBUG OVERLAY
 # ----------------------------------------------------
 @app.route("/v1/debug-overlay", methods=["POST"])
 def debug_overlay():
@@ -134,7 +135,6 @@ def debug_overlay():
 
     page = np.array(images[1])
 
-    # Find anchor automatically
     anchor_y = find_panel_anchor(page)
 
     overlay = page.copy()
@@ -163,7 +163,7 @@ def debug_overlay():
 
 
 # ----------------------------------------------------
-# Health Check
+# HEALTH CHECK
 # ----------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
