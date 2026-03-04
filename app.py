@@ -8,11 +8,14 @@ app = Flask(__name__)
 
 API_KEY = "ithrive_secure_2026_key"
 
-# ---- HARDCODED STRIPE X RANGE ----
-X_LEFT = 1400
-X_RIGHT = 1600
+# ======================================
+# HARDCODED STRIPE POSITION (FIXED)
+# ======================================
 
-# ---- HARDCODED ROWS (based on your strict system) ----
+# These are now aligned with the actual disease bars
+X_LEFT = 950
+X_RIGHT = 1250
+
 DISEASE_ROWS = [
     (689, 709),
     (714, 734),
@@ -71,7 +74,6 @@ def debug_overlay():
 
     page = np.array(images[1])
 
-    # Draw boxes
     for (y1, y2) in DISEASE_ROWS:
         cv2.rectangle(page, (X_LEFT, y1), (X_RIGHT, y2), (0, 0, 255), 3)
 
@@ -82,7 +84,7 @@ def debug_overlay():
 
 
 # ======================================
-# HEALTH
+# HEALTH CHECK
 # ======================================
 
 @app.route("/", methods=["GET"])
