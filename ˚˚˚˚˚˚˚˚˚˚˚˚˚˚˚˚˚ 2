@@ -1,0 +1,40 @@
+kimport fitz
+import cv2
+import numpy as np
+
+# === CHANGE THIS IF NEEDED ===
+pdf_path = "/Users/gregory/Desktop/Lew Rothman Bio Scan 11-06-25.pdf"
+
+# Open PDF
+doc = fitz.open(pdf_path)
+
+# Page 2 (index 1)
+page = doc[1]
+
+# Render at 400 DPI
+zoom = 400 / 72
+mat = fitz.Matrix(zoom, zoom)
+pix = page.get_pixmap(matrix=mat, alpha=False)
+
+# Convert to writable NumPy array
+img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+    pix.height, pix.width, 3
+).copy()
+
+print("HEIGHT:", pix.height)
+print("WIDTH:", pix.width)
+
+# Draw horizontal guide lines every 200 pixels
+for y in range(0, pix.height, 200):
+    cv2.line(img, (0, y), (pix.width, y), (0, 0, 255), 1)
+
+# Draw vertical guide lines every 200 pixels
+for x in range(0, pix.width, 200):
+    cv2.line(img, (x, 0), (x, pix.height), (0, 0, 255), 1)
+
+# Save debug image
+cv2.imwrite("debug_grid.png", img)
+
+print("Saved debug_grid.png")
+
+doc.close()
