@@ -1,50 +1,90 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 import numpy as np
-import cv2
 from pdf2image import convert_from_bytes
+import os
 
+from parser.layout_registry import fingerprint_layout, register_layout
 from parser.anchors import detect_all_anchors
-from parser.rows import detect_row_lines
+from parser.rows import detect_rows
 from parser.extract import extract_disease_scores
+from parser.layout_normalizer import normalize_dpi
+from parser.system_engine import compute_system_summary, compute_consultation_summary
+from engine.pattern_engine import detect_patterns
+from engine.protocol_engine import build_protocol
+from engine.narrative_engine import generate_health_narrative
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static")
+CORS(app)
 
+ENGINE_NAME = "ithrive_disease_parser_v1"
 API_KEY = "ithrive_secure_2026_key"
 
+@app.route("/")
+def root():
+    return jsonify({
+        "engine": ENGINE_NAME,
+        "status": "ok"
+    })
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "engine": ENGINE_NAME,
+        "status": "ok"
+    })
+
+@app.route("/docs")
+def docs():
+    return send_from_directory("static", "docs.html")
 
 @app.route("/parse-report", methods=["POST"])
 def parse_report():
 
-    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
-        return jsonify({"error": "Unauthorized"}), 401
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {API_KEY}":
+        return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "no file"}), 400
 
-    pdf_file = request.files["file"]
+    file = request.files["file"]
+    pdf_bytes = file.read()
 
-    pages = convert_from_bytes(pdf_file.read())
+    pages = convert_from_bytes(pdf_bytes)
+
+    if len(pages) < 2:
+        return jsonify({"error": "report missing disease page"}), 400
 
     page = np.array(pages[1])
 
-    img = cv2.cvtColor(page, cv2.COLOR_RGB2BGR)
+    page, _ = normalize_dpi(page)
 
-    anchors = detect_all_anchors(img)
+    anchors = detect_all_anchors(page)
 
-    rows = detect_row_lines(
-        img,
-        anchors["header_y"],
-        anchors["table_bottom_y"]
-    )
+    rows = detect_rows(page, anchors)
 
-    scores = extract_disease_scores(img, rows, anchors)
+    layout_hash = fingerprint_layout(page, anchors, rows)
+
+    register_layout(layout_hash, anchors, rows)
+
+    scores = extract_disease_scores(page, anchors, rows)
+    patterns = detect_patterns(scores)
+    protocol = build_protocol(patterns)
+    system_summary = compute_system_summary(scores)
+    consultation_summary = compute_consultation_summary(system_summary)
+    narrative = generate_health_narrative(system_summary, consultation_summary, protocol)
 
     return jsonify({
-        "engine": "ithrive_disease_parser_v1",
-        "anchors": anchors,
-        "disease_scores": scores
-    })
-
+    "engine": ENGINE_NAME,
+    "layout_id": layout_hash,
+    "system_summary": system_summary,
+    "consultation_summary": consultation_summary,
+    "protocol": protocol,
+    "health_narrative": narrative,
+    "disease_scores": scores
+})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ITHRIVE Parser Test</title>
+
+<style>
+body{
+    font-family: Arial;
+    background:#111;
+    color:#fff;
+    padding:40px;
+}
+
+h1{
+    color:#42BAB2;
+}
+
+button{
+    padding:10px 20px;
+    background:#42BAB2;
+    border:none;
+    color:white;
+    font-size:16px;
+    cursor:pointer;
+}
+
+input{
+    margin:20px 0;
+}
+
+pre{
+    background:#222;
+    padding:20px;
+    border-radius:6px;
+    overflow:auto;
+}
+</style>
+
+</head>
+
+<body>
+
+<h1>ITHRIVE Disease Parser</h1>
+
+<input type="file" id="file">
+<br>
+
+<button onclick="upload()">Parse Report</button>
+
+<h2>Response</h2>
+<pre id="output">Waiting for upload...</pre>
+
+<script>
+
+async function upload(){
+
+    const file = document.getElementById("file").files[0]
+
+    if(!file){
+        alert("Select a PDF")
+        return
+    }
+
+    const formData = new FormData()
+    formData.append("file", file)
+
+    const res = await fetch("/parse-report",{
+        method:"POST",
+        headers:{
+            "Authorization":"Bearer ithrive_secure_2026_key"
+        },
+        body:formData
+    })
+
+    const data = await res.json()
+
+    document.getElementById("output").textContent =
+        JSON.stringify(data,null,2)
+}
+
+</script>
+
+</body>
+</html>

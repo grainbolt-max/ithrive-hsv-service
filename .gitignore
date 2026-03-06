@@ -1,1 +1,75 @@
-venv/
+from flask import Flask, request, jsonify
+import numpy as np
+import cv2
+from pdf2image import convert_from_bytes
+
+from parser.anchors import detect_all_anchors
+from parser.rows import detect_row_lines
+from parser.extract import extract_disease_scores
+
+app = Flask(__name__)
+
+API_KEY = "ithrive_secure_2026_key"
+
+
+def compute_parser_confidence(scores):
+
+    if not scores:
+        return 0.0
+
+    valid_scores = [v for v in scores.values() if v > 0]
+
+    if len(valid_scores) == 0:
+        return 0.0
+
+    coverage = len(valid_scores)
+
+    avg_score = sum(valid_scores) / len(valid_scores)
+
+    confidence = min(1.0, (coverage / 10.0) * 0.5 + avg_score * 0.5)
+
+    return round(confidence, 3)
+
+
+@app.route("/parse-report", methods=["POST"])
+def parse_report():
+
+    if request.headers.get("Authorization") != f"Bearer {API_KEY}":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    pdf_file = request.files["file"]
+
+    pages = convert_from_bytes(pdf_file.read())
+
+    if len(pages) < 2:
+        return jsonify({"error": "Invalid report"}), 400
+
+    page = np.array(pages[1])
+
+    img = cv2.cvtColor(page, cv2.COLOR_RGB2BGR)
+
+    anchors = detect_all_anchors(img)
+
+    rows = detect_row_lines(
+        img,
+        anchors["header_y"],
+        anchors["table_bottom_y"]
+    )
+
+    scores = extract_disease_scores(img, rows, anchors)
+
+    confidence = compute_parser_confidence(scores)
+
+    return jsonify({
+        "engine": "ithrive_disease_parser_v1",
+        "confidence": confidence,
+        "anchors": anchors,
+        "disease_scores": scores
+    })
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
