@@ -2,15 +2,23 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install Poppler (required by pdf2image)
+# Install system dependencies
+# - poppler-utils: required by pdf2image
+# - tesseract-ocr: required by pytesseract
+# - libgl1: required by opencv
 RUN apt-get update && \
-    apt-get install -y poppler-utils && \
-    apt-get clean
+    apt-get install -y \
+    poppler-utils \
+    tesseract-ocr \
+    libgl1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
 COPY . .
 
-# Production server (memory safe config)
+# Production server configuration
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:10000", "--workers", "1", "--threads", "2"]
