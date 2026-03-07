@@ -127,6 +127,7 @@ def parse_report():
     page, _ = normalize_dpi(page)
 
     anchors = detect_all_anchors(page)
+    print("ANCHORS:", anchors)
     rows = detect_rows(page, anchors)
 
     layout_hash = fingerprint_layout(page, anchors, rows)
