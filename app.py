@@ -64,9 +64,15 @@ def debug_crop():
 
     debug_img = page.copy()
 
-    # draw anchors
-    for name, (x, y) in anchors.items():
-        cv2.circle(debug_img, (int(x), int(y)), 10, (255,0,0), -1)
+    # draw anchors safely
+try:
+    if isinstance(anchors, dict):
+        for k, v in anchors.items():
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                x, y = v
+                cv2.circle(debug_img, (int(x), int(y)), 10, (255,0,0), -1)
+except Exception as e:
+    print("anchor debug draw skipped:", e)
 
     # draw row boxes
     for r in rows:
