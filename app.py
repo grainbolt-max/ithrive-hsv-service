@@ -40,7 +40,22 @@ def docs():
 
 @server.route("/debug-crop")
 def debug_crop():
-    return send_from_directory("/tmp", "debug_crop.png")
+    import cv2
+    import numpy as np
+    from flask import Response
+
+    # create a test image
+    img = np.zeros((600, 600, 3), dtype=np.uint8)
+
+    # draw a visible rectangle
+    cv2.rectangle(img, (100, 100), (500, 500), (0, 255, 0), 5)
+
+    # encode image to PNG in memory
+    success, buffer = cv2.imencode(".png", img)
+    if not success:
+        return "Image encoding failed", 500
+
+    return Response(buffer.tobytes(), mimetype="image/png")
 
 @server.route("/parse-report", methods=["POST"])
 def parse_report():
