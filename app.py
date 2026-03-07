@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 import numpy as np
 from pdf2image import convert_from_bytes
@@ -20,12 +20,14 @@ CORS(server)
 ENGINE_NAME = "ithrive_disease_parser_v1"
 API_KEY = "ithrive_secure_2026_key"
 
+
 @server.route("/")
 def root():
     return jsonify({
         "engine": ENGINE_NAME,
         "status": "ok"
     })
+
 
 @server.route("/health")
 def health():
@@ -34,16 +36,17 @@ def health():
         "status": "ok"
     })
 
+
 @server.route("/docs")
 def docs():
     return send_from_directory("static", "docs.html")
+
 
 @server.route("/debug-crop", methods=["POST"])
 def debug_crop():
 
     import cv2
     import numpy as np
-    from flask import Response
 
     if "file" not in request.files:
         return "missing file", 400
@@ -65,23 +68,27 @@ def debug_crop():
     debug_img = page.copy()
 
     # draw anchors safely
-try:
-    if isinstance(anchors, dict):
-        for k, v in anchors.items():
-            if isinstance(v, (list, tuple)) and len(v) == 2:
-                x, y = v
-                cv2.circle(debug_img, (int(x), int(y)), 10, (255,0,0), -1)
-except Exception as e:
-    print("anchor debug draw skipped:", e)
+    try:
+        if isinstance(anchors, dict):
+            for k, v in anchors.items():
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    x, y = v
+                    cv2.circle(debug_img, (int(x), int(y)), 10, (255, 0, 0), -1)
+    except Exception as e:
+        print("anchor debug draw skipped:", e)
 
     # draw row boxes
     for r in rows:
         x1, y1, x2, y2 = r
-        cv2.rectangle(debug_img, (x1,y1), (x2,y2), (0,255,0), 2)
+        cv2.rectangle(debug_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    _, buffer = cv2.imencode(".png", debug_img)
+    success, buffer = cv2.imencode(".png", debug_img)
+
+    if not success:
+        return "image encoding failed", 500
 
     return Response(buffer.tobytes(), mimetype="image/png")
+
 
 @server.route("/parse-report", methods=["POST"])
 def parse_report():
@@ -102,15 +109,12 @@ def parse_report():
         return jsonify({"error": "report missing disease page"}), 400
 
     page = np.array(pages[1])
-
     page, _ = normalize_dpi(page)
 
     anchors = detect_all_anchors(page)
-
     rows = detect_rows(page, anchors)
 
     layout_hash = fingerprint_layout(page, anchors, rows)
-
     register_layout(layout_hash, anchors, rows)
 
     scores = extract_disease_scores(page, anchors, rows)
@@ -121,18 +125,18 @@ def parse_report():
     narrative = generate_health_narrative(system_summary, consultation_summary, protocol)
 
     return jsonify({
-    "engine": ENGINE_NAME,
-    "layout_id": layout_hash,
-    "system_summary": system_summary,
-    "consultation_summary": consultation_summary,
-    "protocol": protocol,
-    "health_narrative": narrative,
-    "disease_scores": scores
-})
+        "engine": ENGINE_NAME,
+        "layout_id": layout_hash,
+        "system_summary": system_summary,
+        "consultation_summary": consultation_summary,
+        "protocol": protocol,
+        "health_narrative": narrative,
+        "disease_scores": scores
+    })
 
 
 if __name__ == "__main__":
-    
+
     print("\nREGISTERED ROUTES:")
     for rule in server.url_map.iter_rules():
         print(rule)
