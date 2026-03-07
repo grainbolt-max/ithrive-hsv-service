@@ -2,6 +2,11 @@ import cv2
 import numpy as np
 from parser.disease_list import DISEASE_LIST
 
+# fixed sampling window (very narrow stripe)
+SCORE_SAMPLE_LEFT = 904
+SCORE_SAMPLE_RIGHT = 910
+
+
 def detect_bar_color(bar_region):
 
     hsv = cv2.cvtColor(bar_region, cv2.COLOR_BGR2HSV)
@@ -34,13 +39,17 @@ def extract_disease_scores(img, anchors, rows):
 
     scores = {}
 
-    x1 = anchors["risk_bar_x"]
-    x2 = anchors["risk_bar_x"] + anchors["risk_bar_width"]
+    # use deterministic sampling stripe instead of anchor detection
+    x1 = SCORE_SAMPLE_LEFT
+    x2 = SCORE_SAMPLE_RIGHT
 
     for i, row in enumerate(rows[:len(DISEASE_LIST)]):
 
-        y1 = int(row)
-        y2 = int(row + 20)
+        # sample a slightly thicker vertical region around row center
+        y_center = int(row)
+
+        y1 = max(0, y_center - 3)
+        y2 = y_center + 3
 
         bar_region = img[y1:y2, x1:x2]
 
