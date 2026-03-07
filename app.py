@@ -16,6 +16,10 @@ from engine.narrative_engine import generate_health_narrative
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
+print("\nREGISTERED ROUTES:")
+for rule in app.url_map.iter_rules():
+    print(rule)
+print("")
 
 ENGINE_NAME = "ithrive_disease_parser_v1"
 API_KEY = "ithrive_secure_2026_key"
