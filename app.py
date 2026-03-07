@@ -14,39 +14,35 @@ from engine.pattern_engine import detect_patterns
 from engine.protocol_engine import build_protocol
 from engine.narrative_engine import generate_health_narrative
 
-app = Flask(__name__, static_folder="static")
-CORS(app)
-print("\nREGISTERED ROUTES:")
-for rule in app.url_map.iter_rules():
-    print(rule)
-print("")
+server = Flask(__name__, static_folder="static")
+CORS(server)
 
 ENGINE_NAME = "ithrive_disease_parser_v1"
 API_KEY = "ithrive_secure_2026_key"
 
-@app.route("/")
+@server.route("/")
 def root():
     return jsonify({
         "engine": ENGINE_NAME,
         "status": "ok"
     })
 
-@app.route("/health")
+@server.route("/health")
 def health():
     return jsonify({
         "engine": ENGINE_NAME,
         "status": "ok"
     })
 
-@app.route("/docs")
+@server.route("/docs")
 def docs():
     return send_from_directory("static", "docs.html")
 
-@app.route("/debug-crop")
+@server.route("/debug-crop")
 def debug_crop():
     return send_from_directory("/tmp", "debug_crop.png")
 
-@app.route("/parse-report", methods=["POST"])
+@server.route("/parse-report", methods=["POST"])
 def parse_report():
 
     auth = request.headers.get("Authorization", "")
@@ -93,6 +89,13 @@ def parse_report():
     "disease_scores": scores
 })
 
+
 if __name__ == "__main__":
+    
+    print("\nREGISTERED ROUTES:")
+    for rule in server.url_map.iter_rules():
+        print(rule)
+    print("")
+
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    server.run(host="0.0.0.0", port=port)
