@@ -77,10 +77,26 @@ def debug_crop():
     except Exception as e:
         print("anchor debug draw skipped:", e)
 
-    # draw row boxes
+    # draw row boxes safely
     for r in rows:
-        x1, y1, x2, y2 = r
-        cv2.rectangle(debug_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # case 1: row returned as rectangle
+        if isinstance(r, (list, tuple)) and len(r) == 4:
+            x1, y1, x2, y2 = r
+
+        # case 2: row returned as Y coordinate
+        elif isinstance(r, (int, float)):
+            y = int(r)
+            x1 = 0
+            x2 = debug_img.shape[1]
+            y1 = y - 5
+            y2 = y + 5
+
+        else:
+            print("invalid row format:", r)
+            continue
+
+        cv2.rectangle(debug_img, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
 
     success, buffer = cv2.imencode(".png", debug_img)
 
@@ -88,7 +104,6 @@ def debug_crop():
         return "image encoding failed", 500
 
     return Response(buffer.tobytes(), mimetype="image/png")
-
 
 @server.route("/parse-report", methods=["POST"])
 def parse_report():
