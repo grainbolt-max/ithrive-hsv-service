@@ -38,22 +38,42 @@ def health():
 def docs():
     return send_from_directory("static", "docs.html")
 
-@server.route("/debug-crop")
+@server.route("/debug-crop", methods=["POST"])
 def debug_crop():
+
     import cv2
     import numpy as np
     from flask import Response
 
-    # create a test image
-    img = np.zeros((600, 600, 3), dtype=np.uint8)
+    if "file" not in request.files:
+        return "missing file", 400
 
-    # draw a visible rectangle
-    cv2.rectangle(img, (100, 100), (500, 500), (0, 255, 0), 5)
+    file = request.files["file"]
+    pdf_bytes = file.read()
 
-    # encode image to PNG in memory
-    success, buffer = cv2.imencode(".png", img)
-    if not success:
-        return "Image encoding failed", 500
+    pages = convert_from_bytes(pdf_bytes)
+
+    if len(pages) < 2:
+        return "missing disease page", 400
+
+    page = np.array(pages[1])
+    page, _ = normalize_dpi(page)
+
+    anchors = detect_all_anchors(page)
+    rows = detect_rows(page, anchors)
+
+    debug_img = page.copy()
+
+    # draw anchors
+    for name, (x, y) in anchors.items():
+        cv2.circle(debug_img, (int(x), int(y)), 10, (255,0,0), -1)
+
+    # draw row boxes
+    for r in rows:
+        x1, y1, x2, y2 = r
+        cv2.rectangle(debug_img, (x1,y1), (x2,y2), (0,255,0), 2)
+
+    _, buffer = cv2.imencode(".png", debug_img)
 
     return Response(buffer.tobytes(), mimetype="image/png")
 
