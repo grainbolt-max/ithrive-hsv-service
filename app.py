@@ -46,7 +46,6 @@ def docs():
 def debug_crop():
 
     import cv2
-    import numpy as np
 
     if "file" not in request.files:
         return "missing file", 400
@@ -59,35 +58,30 @@ def debug_crop():
     if len(pages) < 2:
         return "missing disease page", 400
 
-   page = np.array(pages[1])
-   page, _ = normalize_dpi(page)
+    page = np.array(pages[1])
+    page, _ = normalize_dpi(page)
 
-   anchors = detect_all_anchors(page)
-   print("ANCHORS:", anchors, flush=True)
+    anchors = detect_all_anchors(page)
+    print("ANCHORS:", anchors, flush=True)
 
-   rows = detect_rows(page, anchors)
-   print("ROWS:", len(rows), flush=True)
+    rows = detect_rows(page, anchors)
+    print("ROWS:", len(rows), flush=True)
 
     debug_img = page.copy()
 
-    # draw anchors safely
-    try:
-        if isinstance(anchors, dict):
-            for k, v in anchors.items():
-                if isinstance(v, (list, tuple)) and len(v) == 2:
-                    x, y = v
-                    cv2.circle(debug_img, (int(x), int(y)), 10, (255, 0, 0), -1)
-    except Exception as e:
-        print("anchor debug draw skipped:", e)
+    # draw anchor points
+    if isinstance(anchors, dict):
+        for k, v in anchors.items():
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                x, y = v
+                cv2.circle(debug_img, (int(x), int(y)), 10, (255, 0, 0), -1)
 
-    # draw row boxes safely
+    # draw row boxes
     for r in rows:
 
-        # case 1: row returned as rectangle
         if isinstance(r, (list, tuple)) and len(r) == 4:
             x1, y1, x2, y2 = r
 
-        # case 2: row returned as Y coordinate
         elif isinstance(r, (int, float)):
             y = int(r)
             x1 = 0
@@ -96,10 +90,16 @@ def debug_crop():
             y2 = y + 5
 
         else:
-            print("invalid row format:", r)
+            print("invalid row format:", r, flush=True)
             continue
 
-        cv2.rectangle(debug_img, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
+        cv2.rectangle(
+            debug_img,
+            (int(x1), int(y1)),
+            (int(x2), int(y2)),
+            (0, 255, 0),
+            2
+        )
 
     success, buffer = cv2.imencode(".png", debug_img)
 
@@ -107,6 +107,7 @@ def debug_crop():
         return "image encoding failed", 500
 
     return Response(buffer.tobytes(), mimetype="image/png")
+
 
 @server.route("/parse-report", methods=["POST"])
 def parse_report():
@@ -130,8 +131,10 @@ def parse_report():
     page, _ = normalize_dpi(page)
 
     anchors = detect_all_anchors(page)
-    print("ANCHORS:", anchors)
+    print("ANCHORS:", anchors, flush=True)
+
     rows = detect_rows(page, anchors)
+    print("ROWS:", len(rows), flush=True)
 
     layout_hash = fingerprint_layout(page, anchors, rows)
     register_layout(layout_hash, anchors, rows)
@@ -139,9 +142,15 @@ def parse_report():
     scores = extract_disease_scores(page, anchors, rows)
     patterns = detect_patterns(scores)
     protocol = build_protocol(patterns)
+
     system_summary = compute_system_summary(scores)
     consultation_summary = compute_consultation_summary(system_summary)
-    narrative = generate_health_narrative(system_summary, consultation_summary, protocol)
+
+    narrative = generate_health_narrative(
+        system_summary,
+        consultation_summary,
+        protocol
+    )
 
     return jsonify({
         "engine": ENGINE_NAME,
@@ -162,4 +171,8 @@ if __name__ == "__main__":
     print("")
 
     port = int(os.environ.get("PORT", 8080))
-    server.run(host="0.0.0.0", port=port)
+
+    server.run(
+        host="0.0.0.0",
+        port=port
+    )
