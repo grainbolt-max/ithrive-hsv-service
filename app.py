@@ -59,11 +59,14 @@ def debug_crop():
     if len(pages) < 2:
         return "missing disease page", 400
 
-    page = np.array(pages[1])
-    page, _ = normalize_dpi(page)
+   page = np.array(pages[1])
+   page, _ = normalize_dpi(page)
 
-    anchors = detect_all_anchors(page)
-    rows = detect_rows(page, anchors)
+   anchors = detect_all_anchors(page)
+   print("ANCHORS:", anchors, flush=True)
+
+   rows = detect_rows(page, anchors)
+   print("ROWS:", len(rows), flush=True)
 
     debug_img = page.copy()
 
