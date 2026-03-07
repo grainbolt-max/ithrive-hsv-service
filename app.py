@@ -100,7 +100,18 @@ def debug_crop():
             (0, 255, 0),
             2
         )
+        # draw risk bar column
+        if "risk_bar_x" in anchors:
+            x = anchors["risk_bar_x"]
+            w = anchors["risk_bar_width"]
 
+            cv2.rectangle(
+                debug_img,
+                (int(x), 0),
+                (int(x + w), debug_img.shape[0]),
+                (255, 0, 255),
+                3
+        )
     success, buffer = cv2.imencode(".png", debug_img)
 
     if not success:
