@@ -38,6 +38,10 @@ def health():
 def docs():
     return send_from_directory("static", "docs.html")
 
+@app.route("/debug-crop")
+def debug_crop():
+    return send_from_directory("/tmp", "debug_crop.png")
+
 @app.route("/parse-report", methods=["POST"])
 def parse_report():
 
