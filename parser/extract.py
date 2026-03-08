@@ -7,8 +7,8 @@ from parser.disease_list import DISEASE_LIST
 # RISK BAR SAMPLING WINDOW
 # ===================================
 
-SCORE_SAMPLE_LEFT = 904
-SCORE_SAMPLE_RIGHT = 906
+SCORE_SAMPLE_LEFT = 903
+SCORE_SAMPLE_RIGHT = 910
 
 
 # ===================================
