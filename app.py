@@ -101,7 +101,7 @@ def debug_crop():
             (0, 255, 0),
             2
         )
-        # draw risk bar column
+        # draw risk bar column (outside loop) 
         if "risk_bar_x" in anchors:
             x = anchors["risk_bar_x"]
             w = anchors["risk_bar_width"]
@@ -152,7 +152,6 @@ def parse_report():
     register_layout(layout_hash, anchors, rows)
 
     scores = extract_disease_scores(page, anchors, rows)
-    from parser.contract import validate_parser_output
     validate_parser_output(scores)
     patterns = detect_patterns(scores)
     protocol = build_protocol(patterns)
