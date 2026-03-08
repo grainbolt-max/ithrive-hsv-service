@@ -5,7 +5,6 @@ from pdf2image import convert_from_bytes
 import os
 import cv2
 
-from parser.extract import extract_disease_scores
 from parser.layout_normalizer import normalize_dpi
 from parser.system_engine import compute_system_summary, compute_consultation_summary
 
