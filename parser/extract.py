@@ -24,7 +24,7 @@ API_KEY = "ithrive_secure_2026_key"
 # =====================================================
 
 SCORE_SAMPLE_LEFT = 904
-SCORE_SAMPLE_RIGHT = 910
+SCORE_SAMPLE_RIGHT = 906
 
 # =====================================================
 # ROOT
