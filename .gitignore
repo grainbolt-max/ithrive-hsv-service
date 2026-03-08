@@ -78,3 +78,7 @@ __pycache__/
 *.png
 debug*
 venv/
+__pycache__/
+debug*
+*.png
+venv/
