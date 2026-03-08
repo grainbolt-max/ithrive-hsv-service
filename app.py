@@ -13,6 +13,7 @@ from parser.system_engine import compute_system_summary, compute_consultation_su
 from engine.pattern_engine import detect_patterns
 from engine.protocol_engine import build_protocol
 from engine.narrative_engine import generate_health_narrative
+from parser.contract import validate_parser_output
 
 server = Flask(__name__, static_folder="static")
 CORS(server)
@@ -151,6 +152,8 @@ def parse_report():
     register_layout(layout_hash, anchors, rows)
 
     scores = extract_disease_scores(page, anchors, rows)
+    from parser.contract import validate_parser_output
+    validate_parser_output(scores)
     patterns = detect_patterns(scores)
     protocol = build_protocol(patterns)
 
