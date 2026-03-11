@@ -285,6 +285,6 @@ def parse_report(pdf_bytes, debug=False):
     }
 
 
-def extract_scores(pdf_bytes):
-
+# REQUIRED ENTRYPOINT FOR app.py
+def extract_disease_scores(pdf_bytes):
     return parse_report(pdf_bytes)
