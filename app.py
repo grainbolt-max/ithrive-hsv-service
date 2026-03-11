@@ -7,7 +7,7 @@ import os
 from parser.layout_registry import fingerprint_layout, register_layout
 from parser.anchors import detect_all_anchors
 from parser.rows import detect_rows
-from parser.extract import extract_disease_scores
+from parser.extract import parse_report
 from parser.layout_normalizer import normalize_dpi
 from parser.system_engine import compute_system_summary, compute_consultation_summary
 from engine.pattern_engine import detect_patterns
@@ -151,7 +151,7 @@ def parse_report():
     layout_hash = fingerprint_layout(page, anchors, rows)
     register_layout(layout_hash, anchors, rows)
 
-    scores = extract_disease_scores(page, anchors, rows)
+    scores = parse_report(pdf_bytes)
     validate_parser_output(scores)
     patterns = detect_patterns(scores)
     protocol = build_protocol(patterns)
