@@ -70,7 +70,9 @@ def detect_rows(img):
             inside = False
 
     filtered = []
+
     for r in rows:
+
         if not filtered:
             filtered.append(r)
             continue
@@ -133,9 +135,9 @@ def calibrate_colors(samples):
     order = np.argsort(centers)
 
     cluster_map = {
-        order[0]:"yellow",   # cyan → mild
-        order[1]:"orange",   # blue → moderate
-        order[2]:"red"       # dark blue → severe
+        order[0]:"yellow",
+        order[1]:"orange",
+        order[2]:"red"
     }
 
     return centers, cluster_map
@@ -237,6 +239,6 @@ def parse_report(pdf_bytes, debug=False):
     }
 
 
-def extract_scores(pdf_bytes):
+def extract_scores(pdf_bytes, debug=False):
 
-    return parse_report(pdf_bytes)
+    return parse_report(pdf_bytes, debug=debug)
