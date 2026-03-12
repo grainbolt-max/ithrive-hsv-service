@@ -2,9 +2,9 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v67_auto_calibrated_hue_classifier"
+ENGINE_NAME = "v68_deterministic_hsv_classifier"
 
-# Locked sampling column
+# Sampling column (confirmed from overlay)
 X_LEFT = 939
 X_RIGHT = 954
 
@@ -39,13 +39,14 @@ DISEASES = [
 "cerebral_serotonin_decreased"
 ]
 
-
-# ------------------------------------------------
+# ---------------------------
 # ROW DETECTION
-# ------------------------------------------------
+# ---------------------------
+
 def detect_rows(img):
 
     column = img[MIN_Y:MAX_Y, X_LEFT:X_RIGHT]
+
     hsv = cv2.cvtColor(column, cv2.COLOR_BGR2HSV)
 
     rows = []
@@ -83,9 +84,10 @@ def detect_rows(img):
     return filtered
 
 
-# ------------------------------------------------
-# SAMPLE BAR COLOR
-# ------------------------------------------------
+# ---------------------------
+# SAMPLE COLOR
+# ---------------------------
+
 def sample_bar_color(img, y1, y2):
 
     mid = int((y1+y2)/2)
@@ -98,71 +100,30 @@ def sample_bar_color(img, y1, y2):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    return np.array([h,s,v])
+    return h, s, v
 
 
-# ------------------------------------------------
-# CALIBRATE COLORS USING HUE
-# ------------------------------------------------
-def calibrate_colors(samples):
+# ---------------------------
+# COLOR CLASSIFIER
+# ---------------------------
 
-    colored = np.array([s for s in samples if s[1] > 25])
+def classify_bar(h, s):
 
-    if len(colored) < 3:
+    if s < 25:
         return None
 
-    data = colored[:,0].reshape(-1,1).astype(np.float32)
-
-    K = 3
-
-    criteria = (
-        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-        10,
-        1.0
-    )
-
-    _, labels, centers = cv2.kmeans(
-        data,
-        K,
-        None,
-        criteria,
-        10,
-        cv2.KMEANS_RANDOM_CENTERS
-    )
-
-    centers = centers.flatten()
-
-    order = np.argsort(centers)
-
-    cluster_map = {
-        order[0]:"yellow",
-        order[1]:"orange",
-        order[2]:"red"
-    }
-
-    return centers, cluster_map
+    if h < 10:
+        return "red"
+    elif h < 25:
+        return "orange"
+    else:
+        return "yellow"
 
 
-# ------------------------------------------------
-# CLASSIFY BAR
-# ------------------------------------------------
-def classify_bar(sample, centers, cluster_map):
+# ---------------------------
+# DEBUG OVERLAY
+# ---------------------------
 
-    if sample[1] < 25:
-        return None
-
-    h = sample[0]
-
-    dists = [abs(h - c) for c in centers]
-
-    cluster = np.argmin(dists)
-
-    return cluster_map[cluster]
-
-
-# ------------------------------------------------
-# DEBUG DRAW
-# ------------------------------------------------
 def draw_debug(img, rows, scores):
 
     debug = img.copy()
@@ -194,23 +155,17 @@ def draw_debug(img, rows, scores):
     return debug
 
 
-# ------------------------------------------------
+# ---------------------------
 # MAIN PARSER
-# ------------------------------------------------
+# ---------------------------
+
 def parse_report(pdf_bytes, debug=False):
 
-    images = convert_from_bytes(pdf_bytes, dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    img = np.array(images[1])
+    img = np.array(pages[1])
 
     rows = detect_rows(img)
-
-    samples = []
-
-    for y1,y2 in rows:
-        samples.append(sample_bar_color(img,y1,y2))
-
-    centers,cluster_map = calibrate_colors(samples)
 
     scores = {}
 
@@ -219,11 +174,9 @@ def parse_report(pdf_bytes, debug=False):
         if i >= len(DISEASES):
             break
 
-        scores[DISEASES[i]] = classify_bar(
-            samples[i],
-            centers,
-            cluster_map
-        )
+        h,s,v = sample_bar_color(img,y1,y2)
+
+        scores[DISEASES[i]] = classify_bar(h,s)
 
     if debug:
 
@@ -233,9 +186,11 @@ def parse_report(pdf_bytes, debug=False):
 
         return png.tobytes()
 
+    ordered_scores = {d:scores.get(d) for d in DISEASES}
+
     return {
         "engine":ENGINE_NAME,
-        "scores":scores
+        "scores":ordered_scores
     }
 
 
