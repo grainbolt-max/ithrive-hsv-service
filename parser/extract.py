@@ -5,8 +5,8 @@ from pdf2image import convert_from_bytes
 ENGINE_NAME = "v67_auto_calibrated_hue_classifier"
 
 # Locked sampling column
-X_LEFT = 938
-X_RIGHT = 955
+X_LEFT = 939
+X_RIGHT = 954
 
 # Detection window
 MIN_Y = 880
