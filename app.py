@@ -121,8 +121,8 @@ def debug_crop():
     return Response(buffer.tobytes(), mimetype="image/png")
 
 
-@server.route("/parse-report", methods=["POST"])
-def parse_report():
+@app.route("/parse-report", methods=["POST"])
+def parse():
 
     auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {API_KEY}":
