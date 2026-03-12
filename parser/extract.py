@@ -2,9 +2,13 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v68_auto_bar_band_detector"
+ENGINE_NAME = "v67_auto_calibrated_hue_classifier"
 
-# Detection window for disease table
+# Locked sampling column
+X_LEFT = 938
+X_RIGHT = 955
+
+# Detection window
 MIN_Y = 880
 MAX_Y = 2050
 
@@ -35,54 +39,13 @@ DISEASES = [
 "cerebral_serotonin_decreased"
 ]
 
-# ------------------------------------------------
-# DETECT BAR BAND (RIGHT → LEFT)
-# ------------------------------------------------
-def detect_bar_column(img):
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    h, w = hsv.shape[:2]
-
-    search_left = int(w * 0.60)
-    search_right = int(w * 0.98)
-
-    saturation_profile = []
-
-    for x in range(search_left, search_right):
-
-        column = hsv[MIN_Y:MAX_Y, x:x+3]
-
-        s = column[:,:,1]
-
-        score = np.sum(s > 40)
-
-        saturation_profile.append(score)
-
-    saturation_profile = np.array(saturation_profile)
-
-    threshold = np.max(saturation_profile) * 0.4
-
-    indices = np.where(saturation_profile > threshold)[0]
-
-    if len(indices) == 0:
-        return None, None
-
-    left_edge = search_left + indices[0]
-    right_edge = search_left + indices[-1]
-
-    center = int((left_edge + right_edge) / 2)
-
-    return center - 8, center + 8
-
 
 # ------------------------------------------------
 # ROW DETECTION
 # ------------------------------------------------
-def detect_rows(img, X_LEFT, X_RIGHT):
+def detect_rows(img):
 
     column = img[MIN_Y:MAX_Y, X_LEFT:X_RIGHT]
-
     hsv = cv2.cvtColor(column, cv2.COLOR_BGR2HSV)
 
     rows = []
@@ -108,7 +71,6 @@ def detect_rows(img, X_LEFT, X_RIGHT):
 
     filtered = []
     for r in rows:
-
         if not filtered:
             filtered.append(r)
             continue
@@ -122,7 +84,7 @@ def detect_rows(img, X_LEFT, X_RIGHT):
 # ------------------------------------------------
 # SAMPLE BAR COLOR
 # ------------------------------------------------
-def sample_bar_color(img, y1, y2, X_LEFT, X_RIGHT):
+def sample_bar_color(img, y1, y2):
 
     mid = int((y1+y2)/2)
 
@@ -171,9 +133,9 @@ def calibrate_colors(samples):
     order = np.argsort(centers)
 
     cluster_map = {
-        order[0]:"yellow",
-        order[1]:"orange",
-        order[2]:"red"
+        order[0]:"yellow",   # cyan → mild
+        order[1]:"orange",   # blue → moderate
+        order[2]:"red"       # dark blue → severe
     }
 
     return centers, cluster_map
@@ -199,7 +161,7 @@ def classify_bar(sample, centers, cluster_map):
 # ------------------------------------------------
 # DEBUG DRAW
 # ------------------------------------------------
-def draw_debug(img, rows, scores, X_LEFT, X_RIGHT):
+def draw_debug(img, rows, scores):
 
     debug = img.copy()
 
@@ -239,24 +201,14 @@ def parse_report(pdf_bytes, debug=False):
 
     img = np.array(images[1])
 
-    X_LEFT, X_RIGHT = detect_bar_column(img)
-
-    if X_LEFT is None:
-        raise RuntimeError("Failed to detect disease bar column")
-
-    rows = detect_rows(img, X_LEFT, X_RIGHT)
+    rows = detect_rows(img)
 
     samples = []
 
     for y1,y2 in rows:
-        samples.append(sample_bar_color(img,y1,y2,X_LEFT,X_RIGHT))
+        samples.append(sample_bar_color(img,y1,y2))
 
-    calibration = calibrate_colors(samples)
-
-    if calibration is None:
-        raise RuntimeError("Color calibration failed")
-
-    centers,cluster_map = calibration
+    centers,cluster_map = calibrate_colors(samples)
 
     scores = {}
 
@@ -273,7 +225,7 @@ def parse_report(pdf_bytes, debug=False):
 
     if debug:
 
-        overlay = draw_debug(img,rows,scores,X_LEFT,X_RIGHT)
+        overlay = draw_debug(img,rows,scores)
 
         _,png = cv2.imencode(".png",overlay)
 
@@ -285,6 +237,6 @@ def parse_report(pdf_bytes, debug=False):
     }
 
 
-# REQUIRED ENTRYPOINT FOR app.py
-def extract_disease_scores(pdf_bytes, *args, **kwargs):
+def extract_scores(pdf_bytes):
+
     return parse_report(pdf_bytes)
