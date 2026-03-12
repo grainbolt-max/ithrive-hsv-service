@@ -1,191 +1,169 @@
-from flask import Flask, request, jsonify, send_from_directory, Response
-from flask_cors import CORS
-import numpy as np
-from pdf2image import convert_from_bytes
-import os
-
-from parser.layout_registry import fingerprint_layout, register_layout
-from parser.anchors import detect_all_anchors
-from parser.rows import detect_rows
+from flask import Flask, request, jsonify, Response
 from parser.extract import parse_report
-from parser.layout_normalizer import normalize_dpi
-from parser.system_engine import compute_system_summary, compute_consultation_summary
-from engine.pattern_engine import detect_patterns
-from engine.protocol_engine import build_protocol
-from engine.narrative_engine import generate_health_narrative
-from parser.contract import validate_parser_output
 
-server = Flask(__name__, static_folder="static")
-CORS(server)
-
-ENGINE_NAME = "ithrive_disease_parser_v1"
 API_KEY = "ithrive_secure_2026_key"
 
-
-@server.route("/")
-def root():
-    return jsonify({
-        "engine": ENGINE_NAME,
-        "status": "ok"
-    })
+app = Flask(__name__)
 
 
-@server.route("/health")
+@app.route("/", methods=["GET"])
 def health():
-    return jsonify({
-        "engine": ENGINE_NAME,
+    return {
+        "engine": "ithrive_disease_parser_v1",
         "status": "ok"
-    })
+    }
 
 
-@server.route("/docs")
-def docs():
-    return send_from_directory("static", "docs.html")
-
-
-@server.route("/debug-crop", methods=["POST"])
-def debug_crop():
-
-    import cv2
-
-    if "file" not in request.files:
-        return "missing file", 400
-
-    file = request.files["file"]
-    pdf_bytes = file.read()
-
-    pages = convert_from_bytes(pdf_bytes)
-
-    if len(pages) < 2:
-        return "missing disease page", 400
-
-    page = np.array(pages[1])
-    page, _ = normalize_dpi(page)
-
-    anchors = detect_all_anchors(page)
-    print("ANCHORS:", anchors, flush=True)
-
-    rows = detect_rows(page, anchors)
-    print("ROWS:", len(rows), flush=True)
-
-    debug_img = page.copy()
-
-    # draw anchor points
-    if isinstance(anchors, dict):
-        for k, v in anchors.items():
-            if isinstance(v, (list, tuple)) and len(v) == 2:
-                x, y = v
-                cv2.circle(debug_img, (int(x), int(y)), 10, (255, 0, 0), -1)
-
-    # draw row boxes
-    for r in rows:
-
-        if isinstance(r, (list, tuple)) and len(r) == 4:
-            x1, y1, x2, y2 = r
-
-        elif isinstance(r, (int, float)):
-            y = int(r)
-            x1 = 0
-            x2 = debug_img.shape[1]
-            y1 = y - 5
-            y2 = y + 5
-
-        else:
-            print("invalid row format:", r, flush=True)
-            continue
-
-        cv2.rectangle(
-            debug_img,
-            (int(x1), int(y1)),
-            (int(x2), int(y2)),
-            (0, 255, 0),
-            2
-        )
-        # draw risk bar column (outside loop) 
-        if "risk_bar_x" in anchors:
-            x = anchors["risk_bar_x"]
-            w = anchors["risk_bar_width"]
-
-            cv2.rectangle(
-                debug_img,
-                (int(x), 0),
-                (int(x + w), debug_img.shape[0]),
-                (255, 0, 255),
-                3
-        )
-    success, buffer = cv2.imencode(".png", debug_img)
-
-    if not success:
-        return "image encoding failed", 500
-
-    return Response(buffer.tobytes(), mimetype="image/png")
+@app.route("/health", methods=["GET"])
+def health_check():
+    return {"status": "ok"}
 
 
 @app.route("/parse-report", methods=["POST"])
 def parse():
 
-    auth = request.headers.get("Authorization", "")
+    auth = request.headers.get("Authorization")
+
     if auth != f"Bearer {API_KEY}":
         return jsonify({"error": "unauthorized"}), 401
 
     if "file" not in request.files:
-        return jsonify({"error": "no file"}), 400
+        return jsonify({"error": "missing file"}), 400
 
-    file = request.files["file"]
-    pdf_bytes = file.read()
+    pdf_file = request.files["file"]
+    pdf_bytes = pdf_file.read()
 
-    pages = convert_from_bytes(pdf_bytes)
+    debug = request.args.get("debug")
 
-    if len(pages) < 2:
-        return jsonify({"error": "report missing disease page"}), 400
+    try:
 
-    page = np.array(pages[1])
-    page, _ = normalize_dpi(page)
+        if debug == "1":
+            png = parse_report(pdf_bytes, debug=True)
+            return Response(
+                png,
+                mimetype="image/png"
+            )
 
-    anchors = detect_all_anchors(page)
-    print("ANCHORS:", anchors, flush=True)
+        result = parse_report(pdf_bytes)
 
-    rows = detect_rows(page, anchors)
-    print("ROWS:", len(rows), flush=True)
+        return jsonify(result)
 
-    layout_hash = fingerprint_layout(page, anchors, rows)
-    register_layout(layout_hash, anchors, rows)
+    except Exception as e:
 
-    scores = parse_report(pdf_bytes)
-    validate_parser_output(scores)
-    patterns = detect_patterns(scores)
-    protocol = build_protocol(patterns)
+        return jsonify({
+            "error": "parser_failure",
+            "message": str(e)
+        }), 500
 
-    system_summary = compute_system_summary(scores)
-    consultation_summary = compute_consultation_summary(system_summary)
 
-    narrative = generate_health_narrative(
-        system_summary,
-        consultation_summary,
-        protocol
+@app.route("/debug-crop", methods=["POST"])
+def debug_crop():
+
+    if "file" not in request.files:
+        return jsonify({"error": "missing file"}), 400
+
+    pdf_file = request.files["file"]
+    pdf_bytes = pdf_file.read()
+
+    png = parse_report(pdf_bytes, debug=True)
+
+    return Response(
+        png,
+        mimetype="image/png"
     )
 
-    return jsonify({
-        "engine": ENGINE_NAME,
-        "layout_id": layout_hash,
-        "system_summary": system_summary,
-        "consultation_summary": consultation_summary,
-        "protocol": protocol,
-        "health_narrative": narrative,
-        "disease_scores": scores
+
+@app.route("/docs", methods=["GET"])
+def docs():
+
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ITHRIVE Parser Test</title>
+
+<style>
+body{
+    font-family: Arial;
+    background:#111;
+    color:#fff;
+    padding:40px;
+}
+
+h1{
+    color:#42BAB2;
+}
+
+button{
+    padding:10px 20px;
+    background:#42BAB2;
+    border:none;
+    color:white;
+    font-size:16px;
+    cursor:pointer;
+}
+
+input{
+    margin:20px 0;
+}
+
+pre{
+    background:#222;
+    padding:20px;
+    border-radius:6px;
+    overflow:auto;
+}
+</style>
+
+</head>
+
+<body>
+
+<h1>ITHRIVE Disease Parser</h1>
+
+<input type="file" id="file">
+<br>
+
+<button onclick="upload()">Parse Report</button>
+
+<h2>Response</h2>
+<pre id="output">Waiting for upload...</pre>
+
+<script>
+
+async function upload(){
+
+    const file = document.getElementById("file").files[0]
+
+    if(!file){
+        alert("Select a PDF")
+        return
+    }
+
+    const formData = new FormData()
+    formData.append("file", file)
+
+    const res = await fetch("/parse-report",{
+        method:"POST",
+        headers:{
+            "Authorization":"Bearer ithrive_secure_2026_key"
+        },
+        body:formData
     })
+
+    const data = await res.json()
+
+    document.getElementById("output").textContent =
+        JSON.stringify(data,null,2)
+}
+
+</script>
+
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":
-
-    print("\nREGISTERED ROUTES:")
-    for rule in server.url_map.iter_rules():
-        print(rule)
-    print("")
-
-    port = int(os.environ.get("PORT", 8080))
-
-    server.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0", port=10000)
