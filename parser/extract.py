@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v83_locked_column_classifier_hsv"
+ENGINE_NAME = "v83_locked_column_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -16,7 +16,7 @@ BLOCK_HEIGHT = 16
 
 
 # --------------------------------------------------
-# ROW START COORDINATES (LOCKED)
+# ROW START COORDINATES (FINAL LOCKED)
 # --------------------------------------------------
 
 ROW_START = {
@@ -37,7 +37,7 @@ ROW_START = {
 
     # PANEL 2
     "hypothyroidism": 1530,
-    "hyperthyroidism": 1560,
+    "hyperthyroidism": 1545,
     "hepatic_fibrosis": 1590,
     "chronic_hepatitis": 1620,
     "prostate_cancer": 1655,
@@ -47,7 +47,20 @@ ROW_START = {
     "major_depression": 1810,
     "adhd_children_learning": 1840,
     "cerebral_dopamine_decreased": 1870,
-    "cerebral_serotonin_decreased": 1900,
+    "cerebral_serotonin_decreased": 1910,
+}
+
+
+# --------------------------------------------------
+# DEBUG COLOR MAP
+# --------------------------------------------------
+
+COLOR_MAP = {
+    "green": (0,255,0),
+    "yellow": (0,255,255),
+    "orange": (0,165,255),
+    "red": (0,0,255),
+    "unknown": (200,200,200)
 }
 
 
@@ -55,27 +68,31 @@ ROW_START = {
 # HSV COLOR CLASSIFIER
 # --------------------------------------------------
 
-def classify_color(mean_bgr):
+def classify_color(block):
 
-    # convert sampled color to HSV
-    color = np.uint8([[mean_bgr]])
-    hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)[0][0]
+    hsv = cv2.cvtColor(block, cv2.COLOR_BGR2HSV)
 
-    h, s, v = hsv
+    h = np.mean(hsv[:,:,0])
+    s = np.mean(hsv[:,:,1])
+    v = np.mean(hsv[:,:,2])
 
-    # red
+    # very low saturation = gray background
+    if s < 40:
+        return None
+
+    # RED
     if h < 10 or h > 170:
         return "red"
 
-    # orange
-    if 10 <= h < 22:
+    # ORANGE
+    if 10 <= h < 20:
         return "orange"
 
-    # yellow
-    if 22 <= h < 35:
+    # YELLOW
+    if 20 <= h < 35:
         return "yellow"
 
-    # green
+    # GREEN
     if 35 <= h < 85:
         return "green"
 
@@ -83,56 +100,77 @@ def classify_color(mean_bgr):
 
 
 # --------------------------------------------------
-# EXTRACTION
+# MAIN PARSER
 # --------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=300)
 
-    # disease panels live on page 2
-    img = np.array(pages[1])
+    if len(pages) < 2:
+        raise Exception("PDF missing page 2")
+
+    page = pages[1]  # page 2
+    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
     scores = {}
 
-    debug_img = img.copy()
+    for disease, y in ROW_START.items():
 
-    height = img.shape[0]
+        block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
 
-    # draw locked sampling column
-    if debug:
-        cv2.rectangle(
-            debug_img,
-            (X_LEFT, 0),
-            (X_RIGHT, height),
-            (255, 0, 0),
-            2
-        )
+        if block.size == 0:
+            scores[disease] = None
+            continue
 
-    for disease, start_y in ROW_START.items():
+        result = classify_color(block)
 
-        end_y = start_y + BLOCK_HEIGHT
-
-        region = img[start_y:end_y, X_LEFT:X_RIGHT]
-
-        mean_color = np.mean(region.reshape(-1, 3), axis=0)
-
-        classification = classify_color(mean_color)
-
-        scores[disease] = classification
+        scores[disease] = result
 
         if debug:
+
+            color = COLOR_MAP.get(result, COLOR_MAP["unknown"])
+
             cv2.rectangle(
-                debug_img,
-                (X_LEFT, start_y),
-                (X_RIGHT, end_y),
-                (0, 255, 0),
+                img,
+                (X_LEFT, y),
+                (X_RIGHT, y + BLOCK_HEIGHT),
+                color,
                 2
             )
 
+            cv2.putText(
+                img,
+                disease,
+                (X_RIGHT + 10, y + 12),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255,255,255),
+                1
+            )
+
+    # draw locked column guide
     if debug:
-        _, buffer = cv2.imencode(".png", debug_img)
-        return buffer.tobytes()
+
+        cv2.line(
+            img,
+            (X_LEFT,0),
+            (X_LEFT,img.shape[0]),
+            (255,0,0),
+            2
+        )
+
+        cv2.line(
+            img,
+            (X_RIGHT,0),
+            (X_RIGHT,img.shape[0]),
+            (255,0,0),
+            2
+        )
+
+        success, png = cv2.imencode(".png", img)
+
+        return png.tobytes()
 
     return {
         "engine": ENGINE_NAME,
