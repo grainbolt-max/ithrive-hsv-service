@@ -2,9 +2,9 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v68_kmeans_fixed_cluster_map"
+ENGINE_NAME = "v69_hardcoded_robust"
 
-# Locked sampling column
+# Locked sampling column (kept for debug overlay alignment)
 X_LEFT = 937
 X_RIGHT = 954
 
@@ -41,126 +41,89 @@ DISEASES = [
 
 
 # ------------------------------------------------
-# ROW DETECTION
+# ROW DETECTION (brightness-based — catches every bar)
 # ------------------------------------------------
 def detect_rows(img):
 
-    column = img[MIN_Y:MAX_Y, X_LEFT:X_RIGHT]
-    hsv = cv2.cvtColor(column, cv2.COLOR_BGR2HSV)
+    DETECT_X = 810
+    column = img[MIN_Y:MAX_Y, DETECT_X:DETECT_X + 15]
+
+    gray = cv2.cvtColor(column, cv2.COLOR_BGR2GRAY)
 
     rows = []
     inside = False
     start = 0
 
-    for y in range(hsv.shape[0]):
+    for y in range(gray.shape[0]):
 
-        s = np.mean(hsv[y,:,1])
+        intensity = np.mean(gray[y,:])
 
-        if s > 40 and not inside:
+        if intensity < 225 and not inside:
             start = y
             inside = True
 
-        if s < 20 and inside:
+        if intensity > 240 and inside:
 
             end = y
 
             if 10 < (end-start) < 40:
-                rows.append((start+MIN_Y,end+MIN_Y))
+                rows.append((start + MIN_Y, end + MIN_Y))
 
             inside = False
 
     filtered = []
+
     for r in rows:
-
-        if not filtered:
-            filtered.append(r)
-            continue
-
-        if r[0] - filtered[-1][0] > 18:
+        if not filtered or r[0] - filtered[-1][0] > 18:
             filtered.append(r)
 
     return filtered
 
 
 # ------------------------------------------------
-# SAMPLE BAR COLOR
+# SAMPLE BAR COLOR (scans full width — always hits the fill)
 # ------------------------------------------------
 def sample_bar_color(img, y1, y2):
 
-    mid = int((y1+y2)/2)
+    mid = int((y1 + y2) / 2)
 
-    square_left = X_LEFT + 2
-    square_right = X_LEFT + 9
+    bar_zone = img[mid-3:mid+3, 700:980]
 
-    sample = img[mid-2:mid+2, square_left:square_right]
+    hsv = cv2.cvtColor(bar_zone, cv2.COLOR_BGR2HSV)
 
-    hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
+    for x in range(hsv.shape[1]):
 
-    h = np.mean(hsv[:,:,0])
-    s = np.mean(hsv[:,:,1])
-    v = np.mean(hsv[:,:,2])
+        if hsv[0,x,1] > 25:
 
-    return np.array([h,s,v])
+            h = int(hsv[0,x,0])
+            s = int(hsv[0,x,1])
+            v = int(hsv[0,x,2])
 
+            return np.array([h,s,v])
 
-# ------------------------------------------------
-# CALIBRATE COLORS USING HUE (K-MEANS)
-# ------------------------------------------------
-def calibrate_colors(samples):
-
-    colored = np.array([s for s in samples if s[1] > 25])
-
-    if len(colored) < 3:
-        return None, None
-
-    data = colored[:,0].reshape(-1,1).astype(np.float32)
-
-    K = 3
-
-    criteria = (
-        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-        10,
-        1.0
-    )
-
-    _, labels, centers = cv2.kmeans(
-        data,
-        K,
-        None,
-        criteria,
-        10,
-        cv2.KMEANS_RANDOM_CENTERS
-    )
-
-    centers = centers.flatten()
-
-    order = np.argsort(centers)
-
-    # FIXED CLUSTER MAP
-    cluster_map = {
-        order[0]:"red",
-        order[1]:"orange",
-        order[2]:"yellow"
-    }
-
-    return centers, cluster_map
+    return np.array([0,0,255])
 
 
 # ------------------------------------------------
-# CLASSIFY BAR (SAFE VERSION)
+# CLASSIFY (hardcoded HSV — never fails)
 # ------------------------------------------------
-def classify_bar(sample, centers, cluster_map):
+def classify_bar(sample):
 
-    h, s, v = sample
+    h,s,v = sample
 
     if s < 25:
         return "grey"
 
-    dists = [abs(h - c) for c in centers]
+    if h < 20 or h > 160:
+        return "red"
 
-    cluster = np.argmin(dists)
+    elif 20 <= h < 40:
+        return "orange"
 
-    return cluster_map[cluster]
+    elif 40 <= h <= 80:
+        return "yellow"
+
+    return "grey"
 
 
 # ------------------------------------------------
@@ -196,7 +159,7 @@ def draw_debug(img, rows, scores):
 
 
 # ------------------------------------------------
-# MAIN PARSER
+# MAIN PARSER (simplified)
 # ------------------------------------------------
 def parse_report(pdf_bytes, debug=False):
 
@@ -206,12 +169,10 @@ def parse_report(pdf_bytes, debug=False):
 
     rows = detect_rows(img)
 
-    samples = []
-
-    for y1,y2 in rows:
-        samples.append(sample_bar_color(img,y1,y2))
-
-    centers, cluster_map = calibrate_colors(samples)
+    samples = [
+        sample_bar_color(img,y1,y2)
+        for y1,y2 in rows
+    ]
 
     scores = {}
 
@@ -220,11 +181,7 @@ def parse_report(pdf_bytes, debug=False):
         if i >= len(DISEASES):
             break
 
-        scores[DISEASES[i]] = classify_bar(
-            samples[i],
-            centers,
-            cluster_map
-        )
+        scores[DISEASES[i]] = classify_bar(samples[i])
 
     if debug:
 
@@ -235,8 +192,8 @@ def parse_report(pdf_bytes, debug=False):
         return png.tobytes()
 
     return {
-        "engine":ENGINE_NAME,
-        "scores":scores
+        "engine": ENGINE_NAME,
+        "scores": scores
     }
 
 
