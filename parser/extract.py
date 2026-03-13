@@ -74,7 +74,7 @@ def classify_color(mean_bgr):
 def extract_scores(pdf_bytes, debug=False):
 
     pages = convert_from_bytes(pdf_bytes, dpi=200)
-    img = np.array(pages[0])
+    img = np.array(pages[1])
 
     scores = {}
 
