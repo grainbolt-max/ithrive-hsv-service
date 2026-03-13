@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v71_fixed_row_classifier"
+ENGINE_NAME = "v72_offset_row_classifier"
 
 # ------------------------------------------------
 # BAR SAMPLING COLUMN
@@ -12,17 +12,20 @@ X_LEFT = 939
 X_RIGHT = 954
 
 # ------------------------------------------------
-# EXACT ROW CENTERS
-# (measured from the report layout)
+# ROW STRUCTURE
 # ------------------------------------------------
 
-ROWS = [
-880, 925, 970, 1015, 1060,
-1105, 1150, 1200, 1245, 1290,
-1335, 1380, 1450, 1495, 1540,
-1585, 1630, 1675, 1720, 1765,
-1810, 1855, 1900, 1945
+FIRST_ROW = 882
+
+ROW_STEPS = [
+0, 44, 87, 130, 172,
+214, 255, 297, 338, 380,
+421, 462, 532, 573, 615,
+656, 698, 739, 781, 822,
+864, 905, 947, 988
 ]
+
+ROWS = [FIRST_ROW + step for step in ROW_STEPS]
 
 # ------------------------------------------------
 # DISEASE ORDER
@@ -161,6 +164,10 @@ def parse_report(pdf_bytes, debug=False):
         "scores": ordered_scores
     }
 
+
+# ------------------------------------------------
+# EXTERNAL ENTRYPOINT
+# ------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
     return parse_report(pdf_bytes, debug=debug)
