@@ -132,7 +132,7 @@ def draw_debug(img):
 def parse_report(pdf_bytes, debug=False):
 
     # IMPORTANT: 300 DPI so coordinates match measured values
-    pages = convert_from_bytes(pdf_bytes, dpi=300)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if len(pages) < 2:
         raise Exception("PDF missing disease screening page")
