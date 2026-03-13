@@ -2,14 +2,14 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v100_indicator_square_classifier"
+ENGINE_NAME = "v101_indicator_square_classifier"
 
 # --------------------------------------------------
-# LOCKED SAMPLING REGION (indicator square)
+# LOCKED SAMPLING REGION
 # --------------------------------------------------
 
 X_LEFT = 939
-X_RIGHT = 951
+X_RIGHT = 960
 
 BLOCK_HEIGHT = 14
 
@@ -60,57 +60,61 @@ COLOR_MAP = {
 }
 
 # --------------------------------------------------
-# CLASSIFY SQUARE COLOR
+# SAMPLE COLOR
 # --------------------------------------------------
 
-def classify_square(mean_bgr):
-
-    b,g,r = mean_bgr
-
-    if r > 200 and g > 200:
-        return "yellow"
-
-    if r > 200 and g > 100:
-        return "orange"
-
-    if r > 200 and g < 100:
-        return "red"
-
-    return None
-
-
-# --------------------------------------------------
-# SAMPLE SQUARE
-# --------------------------------------------------
-
-def sample_square(img,y):
+def sample_square(img, y):
 
     block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
 
-    mean = np.mean(block.reshape(-1,3),axis=0)
+    hsv = cv2.cvtColor(block, cv2.COLOR_BGR2HSV)
 
-    return mean
+    h = np.mean(hsv[:,:,0])
+    s = np.mean(hsv[:,:,1])
+    v = np.mean(hsv[:,:,2])
 
+    return h,s,v
+
+# --------------------------------------------------
+# CLASSIFY COLOR
+# --------------------------------------------------
+
+def classify_square(h,s,v):
+
+    # LOW SATURATION = NONE / LOW RISK
+    if s < 60:
+        return None
+
+    # YELLOW
+    if h < 30:
+        return "yellow"
+
+    # ORANGE
+    if h < 45:
+        return "orange"
+
+    # RED
+    return "red"
 
 # --------------------------------------------------
 # MAIN PARSER
 # --------------------------------------------------
 
-def extract_scores(pdf_bytes,debug=False):
+def extract_scores(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes,dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     page = pages[1]
 
-    img = cv2.cvtColor(np.array(page),cv2.COLOR_RGB2BGR)
+    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
     scores = {}
 
     for disease,y in ROW_START.items():
 
-        mean = sample_square(img,y)
+        h,s,v = sample_square(img,y)
 
-        risk = classify_square(mean)
+        risk = classify_square(h,s,v)
 
         scores[disease] = risk
 
