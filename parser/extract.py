@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v109_locked_geometry_color_classifier"
+ENGINE_NAME = "v110_center_square_sampling"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -14,12 +14,11 @@ BLOCK_HEIGHT = 14
 
 
 # --------------------------------------------------
-# ROW COORDINATES (LOCKED)
+# ROW COORDINATES
 # --------------------------------------------------
 
 ROW_START = {
 
-    # PANEL 1
     "large_artery_stiffness": 920,
     "peripheral_vessel": 950,
     "blood_pressure_uncontrolled": 985,
@@ -33,7 +32,6 @@ ROW_START = {
     "blood_glucose_uncontrolled": 1265,
     "tissue_inflammatory_process": 1295,
 
-    # PANEL 2
     "hypothyroidism": 1530,
     "hyperthyroidism": 1545,
     "hepatic_fibrosis": 1590,
@@ -62,15 +60,16 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# SAMPLE INDICATOR SQUARE
+# SAMPLE CENTER OF COLORED SQUARE
 # --------------------------------------------------
 
 def sample_square(img, y):
 
     mid = y + BLOCK_HEIGHT // 2
 
-    # isolate center of the colored square
-    sample = img[mid-2:mid+2, X_LEFT+4:X_RIGHT-4]
+    center = int((X_LEFT + X_RIGHT) / 2)
+
+    sample = img[mid-3:mid+3, center-3:center+3]
 
     hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
 
@@ -87,17 +86,19 @@ def sample_square(img, y):
 
 def classify_color(h, s, v):
 
-    # Step 1: detect if there is actually a colored bar
+    # Detect if a bar exists
     if s < 40:
         return None
 
-    # Step 2: classify the color
+    # Yellow
     if h > 22:
         return "yellow"
 
+    # Red
     if v < 210:
         return "red"
 
+    # Orange
     return "orange"
 
 
