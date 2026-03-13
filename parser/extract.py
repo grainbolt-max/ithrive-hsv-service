@@ -2,8 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v111_bar_sampling_restored"
-
+ENGINE_NAME = "v112_square_sampling_locked"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -61,15 +60,17 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# SAMPLE BAR (OLD WORKING METHOD)
+# SAMPLE INDICATOR SQUARE
 # --------------------------------------------------
 
 def sample_bar(img, y):
 
     mid = y + BLOCK_HEIGHT // 2
 
-    # sample entire bar width (restores color bleed behavior)
-    sample = img[mid-3:mid+3, X_LEFT:X_RIGHT]
+    square_left = X_LEFT + 2
+    square_right = X_LEFT + 9
+
+    sample = img[mid-3:mid+3, square_left:square_right]
 
     hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
 
@@ -86,19 +87,19 @@ def sample_bar(img, y):
 
 def classify_color(h, s, v):
 
-    # no bar present
-    if s < 35:
+    # Detect if a bar actually exists (filters text rows)
+    if s < 55:
         return None
 
-    # yellow
+    # Yellow
     if h > 22:
         return "yellow"
 
-    # red
-    if v < 210:
+    # Red
+    if v < 200:
         return "red"
 
-    # orange
+    # Orange
     return "orange"
 
 
