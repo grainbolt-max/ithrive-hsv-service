@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v85_locked_column_kmeans_classifier"
+ENGINE_NAME = "v86_locked_column_kmeans_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -10,11 +10,12 @@ ENGINE_NAME = "v85_locked_column_kmeans_classifier"
 
 X_LEFT = 939
 X_RIGHT = 951
+
 BLOCK_HEIGHT = 16
 
 
 # --------------------------------------------------
-# ROW START COORDINATES (LOCKED)
+# LOCKED ROW COORDINATES
 # --------------------------------------------------
 
 ROW_START = {
@@ -50,14 +51,14 @@ ROW_START = {
 
 
 # --------------------------------------------------
-# DEBUG COLOR MAP
+# DEBUG COLORS
 # --------------------------------------------------
 
 COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    None: (200,200,200)
+    None: (160,160,160)
 }
 
 
@@ -75,16 +76,20 @@ def sample_bar_color(img, y):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
+    # ignore text rows / gray bars
+    if s < 50:
+        return None
+
     return np.array([h,s,v])
 
 
 # --------------------------------------------------
-# CALIBRATE COLORS USING HUE (KMEANS)
+# CALIBRATE COLORS USING KMEANS
 # --------------------------------------------------
 
 def calibrate_colors(samples):
 
-    colored = np.array([s for s in samples if s[1] > 40])
+    colored = np.array([s for s in samples if s is not None])
 
     if len(colored) < 3:
         return None, None
@@ -127,7 +132,10 @@ def calibrate_colors(samples):
 
 def classify_bar(sample, centers, cluster_map):
 
-    if sample[1] < 40:
+    if sample is None:
+        return None
+
+    if centers is None:
         return None
 
     h = sample[0]
@@ -145,7 +153,7 @@ def classify_bar(sample, centers, cluster_map):
 
 def extract_scores(pdf_bytes, debug=False):
 
-    # DO NOT CHANGE DPI
+    # DPI LOCKED — DO NOT CHANGE
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if len(pages) < 2:
@@ -155,8 +163,9 @@ def extract_scores(pdf_bytes, debug=False):
 
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-    samples = []
     disease_list = list(ROW_START.keys())
+
+    samples = []
 
     # --------------------------------------------------
     # SAMPLE ALL BARS
@@ -179,7 +188,7 @@ def extract_scores(pdf_bytes, debug=False):
     scores = {}
 
     # --------------------------------------------------
-    # CLASSIFY EACH BAR
+    # CLASSIFY
     # --------------------------------------------------
 
     for i, disease in enumerate(disease_list):
@@ -213,6 +222,10 @@ def extract_scores(pdf_bytes, debug=False):
                 (255,255,255),
                 1
             )
+
+    # --------------------------------------------------
+    # DEBUG COLUMN LINES
+    # --------------------------------------------------
 
     if debug:
 
