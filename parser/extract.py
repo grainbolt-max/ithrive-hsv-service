@@ -2,36 +2,18 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v69_scaled_coordinate_classifier"
+ENGINE_NAME = "v70_width_based_classifier"
 
-# ---------------------------------------------------
-# DPI CONFIG
-# ---------------------------------------------------
-
-BASE_DPI = 300
 CURRENT_DPI = 200
 
-SCALE = CURRENT_DPI / BASE_DPI
+# Relative column position (percentage of page width)
+BAR_X_RATIO = 0.46
+BAR_WIDTH_RATIO = 0.015
 
-# ---------------------------------------------------
-# LOCKED SAMPLING COLUMN (scaled from 300dpi)
-# ---------------------------------------------------
-
-X_LEFT = int(939 * SCALE)
-X_RIGHT = int(954 * SCALE)
-
-# ---------------------------------------------------
-# DETECTION WINDOW
-# ---------------------------------------------------
-
-MIN_Y = int(880 * SCALE)
-MAX_Y = int(2050 * SCALE)
-
-ROW_HEIGHT = int(46 * SCALE)
-
-# ---------------------------------------------------
-# DISEASE ORDER
-# ---------------------------------------------------
+# Detection window ratios
+MIN_Y_RATIO = 0.42
+MAX_Y_RATIO = 0.98
+ROW_HEIGHT_RATIO = 0.022
 
 DISEASES = [
     "large_artery_stiffness",
@@ -60,29 +42,29 @@ DISEASES = [
     "cerebral_serotonin_decreased",
 ]
 
-# ---------------------------------------------------
-# ROW DETECTION
-# ---------------------------------------------------
 
-def detect_rows():
+def detect_rows(img_height):
+    min_y = int(img_height * MIN_Y_RATIO)
+    row_height = int(img_height * ROW_HEIGHT_RATIO)
 
     rows = []
-    y = MIN_Y
+    y = min_y
 
     for _ in range(len(DISEASES)):
         rows.append(int(y))
-        y += ROW_HEIGHT
+        y += row_height
 
     return rows
 
 
-# ---------------------------------------------------
-# COLOR SAMPLING
-# ---------------------------------------------------
+def compute_bar_column(img_width):
+    x_left = int(img_width * BAR_X_RATIO)
+    x_right = x_left + int(img_width * BAR_WIDTH_RATIO)
+    return x_left, x_right
 
-def sample_bar_color(img, y):
 
-    crop = img[y - 6:y + 6, X_LEFT:X_RIGHT]
+def sample_bar_color(img, y, x_left, x_right):
+    crop = img[y - 6:y + 6, x_left:x_right]
 
     if crop.size == 0:
         return None
@@ -95,10 +77,6 @@ def sample_bar_color(img, y):
 
     return h, s, v
 
-
-# ---------------------------------------------------
-# COLOR CLASSIFIER
-# ---------------------------------------------------
 
 def classify_bar(h, s, v):
 
@@ -117,40 +95,30 @@ def classify_bar(h, s, v):
     return None
 
 
-# ---------------------------------------------------
-# DEBUG OVERLAY
-# ---------------------------------------------------
-
-def draw_debug(img, rows, scores):
-
+def draw_debug(img, rows, scores, x_left, x_right):
     overlay = img.copy()
 
-    # sampling column
+    height = img.shape[0]
+
     cv2.rectangle(
         overlay,
-        (X_LEFT, MIN_Y),
-        (X_RIGHT, MAX_Y),
+        (x_left, int(height * MIN_Y_RATIO)),
+        (x_right, int(height * MAX_Y_RATIO)),
         (255, 0, 0),
         2
     )
 
-    # row markers
     for y in rows:
-
         cv2.rectangle(
             overlay,
-            (X_LEFT - 10, y - 8),
-            (X_RIGHT + 10, y + 8),
+            (x_left - 10, y - 8),
+            (x_right + 10, y + 8),
             (0, 255, 0),
             1
         )
 
     return overlay
 
-
-# ---------------------------------------------------
-# MAIN PARSER
-# ---------------------------------------------------
 
 def parse_report(pdf_bytes, debug=False):
 
@@ -163,13 +131,17 @@ def parse_report(pdf_bytes, debug=False):
 
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-    rows = detect_rows()
+    height, width = img.shape[:2]
+
+    x_left, x_right = compute_bar_column(width)
+
+    rows = detect_rows(height)
 
     scores = {}
 
     for disease, y in zip(DISEASES, rows):
 
-        color = sample_bar_color(img, y)
+        color = sample_bar_color(img, y, x_left, x_right)
 
         if color is None:
             scores[disease] = None
@@ -180,11 +152,8 @@ def parse_report(pdf_bytes, debug=False):
         scores[disease] = classify_bar(h, s, v)
 
     if debug:
-
-        overlay = draw_debug(img, rows, scores)
-
+        overlay = draw_debug(img, rows, scores, x_left, x_right)
         ok, png = cv2.imencode(".png", overlay)
-
         return png.tobytes()
 
     ordered_scores = {d: scores.get(d) for d in DISEASES}
@@ -194,10 +163,6 @@ def parse_report(pdf_bytes, debug=False):
         "scores": ordered_scores
     }
 
-
-# ---------------------------------------------------
-# EXTERNAL ENTRYPOINT
-# ---------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
     return parse_report(pdf_bytes, debug=debug)
