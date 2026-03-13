@@ -41,23 +41,23 @@ DISEASES = [
 
 
 # ------------------------------------------------
-# COLOR NORMALIZATION (convert risk colors → blue palette)
+# COLOR NORMALIZATION (convert yellow/orange/red → blue palette)
 # ------------------------------------------------
 def normalize_colors(img):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     # yellow → cyan
-    mask_yellow = cv2.inRange(hsv, (20,80,80), (35,255,255))
+    mask_yellow = cv2.inRange(hsv, (18,50,50), (40,255,255))
     hsv[:,:,0][mask_yellow > 0] = 90
 
     # orange → blue
-    mask_orange = cv2.inRange(hsv, (10,80,80), (20,255,255))
+    mask_orange = cv2.inRange(hsv, (8,50,50), (18,255,255))
     hsv[:,:,0][mask_orange > 0] = 110
 
     # red → dark blue
-    mask_red1 = cv2.inRange(hsv, (0,80,80), (10,255,255))
-    mask_red2 = cv2.inRange(hsv, (170,80,80), (180,255,255))
+    mask_red1 = cv2.inRange(hsv, (0,50,50), (8,255,255))
+    mask_red2 = cv2.inRange(hsv, (170,50,50), (180,255,255))
     mask_red = cv2.bitwise_or(mask_red1, mask_red2)
     hsv[:,:,0][mask_red > 0] = 130
 
@@ -231,7 +231,7 @@ def parse_report(pdf_bytes, debug=False):
 
     img = np.array(images[1])
 
-    # NEW STAGE: color normalization
+    # NEW STAGE
     img = normalize_colors(img)
 
     rows = detect_rows(img)
@@ -241,7 +241,7 @@ def parse_report(pdf_bytes, debug=False):
     for y1,y2 in rows:
         samples.append(sample_bar_color(img,y1,y2))
 
-    centers,cluster_map = calibrate_colors(samples)
+    centers, cluster_map = calibrate_colors(samples)
 
     scores = {}
 
