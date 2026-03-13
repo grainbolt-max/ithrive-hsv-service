@@ -2,16 +2,19 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v68_blue_normalized_auto_calibrated"
+ENGINE_NAME = "v68_blue_normalized_parser"
 
-# Locked sampling column
-X_LEFT = 938
-X_RIGHT = 955
+# ------------------------------------------------
+# LOCKED COLUMN (DO NOT MOVE)
+# ------------------------------------------------
+X_LEFT = 937
+X_RIGHT = 954
 
-# Detection window
+# detection window
 MIN_Y = 880
 MAX_Y = 2050
 
+# diseases order
 DISEASES = [
 "large_artery_stiffness",
 "peripheral_vessel",
@@ -39,31 +42,47 @@ DISEASES = [
 "cerebral_serotonin_decreased"
 ]
 
-
 # ------------------------------------------------
-# COLOR NORMALIZATION (convert yellow/orange/red → blue palette)
+# COLOR NORMALIZATION
+# convert YELLOW / ORANGE / RED bars → BLUE palette
 # ------------------------------------------------
 def normalize_colors(img):
 
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    # yellow → cyan
-    mask_yellow = cv2.inRange(hsv, (18,50,50), (40,255,255))
-    hsv[:,:,0][mask_yellow > 0] = 90
+    h = hsv[:,:,0]
+    s = hsv[:,:,1]
+    v = hsv[:,:,2]
 
-    # orange → blue
-    mask_orange = cv2.inRange(hsv, (8,50,50), (18,255,255))
-    hsv[:,:,0][mask_orange > 0] = 110
+    mask = (s > 40) & (v > 80)
 
-    # red → dark blue
-    mask_red1 = cv2.inRange(hsv, (0,50,50), (8,255,255))
-    mask_red2 = cv2.inRange(hsv, (170,50,50), (180,255,255))
-    mask_red = cv2.bitwise_or(mask_red1, mask_red2)
-    hsv[:,:,0][mask_red > 0] = 130
+    blue_img = img.copy()
 
-    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    # mild → cyan
+    cyan = np.array([255,255,0], dtype=np.uint8)
 
-    return img
+    # moderate → blue
+    blue = np.array([255,0,0], dtype=np.uint8)
+
+    # severe → dark blue
+    dark_blue = np.array([180,0,0], dtype=np.uint8)
+
+    for y in range(img.shape[0]):
+        for x in range(img.shape[1]):
+
+            if not mask[y,x]:
+                continue
+
+            hue = h[y,x]
+
+            if hue > 22:
+                blue_img[y,x] = cyan
+            elif v[y,x] < 210:
+                blue_img[y,x] = dark_blue
+            else:
+                blue_img[y,x] = blue
+
+    return blue_img
 
 
 # ------------------------------------------------
@@ -72,6 +91,7 @@ def normalize_colors(img):
 def detect_rows(img):
 
     column = img[MIN_Y:MAX_Y, X_LEFT:X_RIGHT]
+
     hsv = cv2.cvtColor(column, cv2.COLOR_BGR2HSV)
 
     rows = []
@@ -98,6 +118,7 @@ def detect_rows(img):
     filtered = []
 
     for r in rows:
+
         if not filtered:
             filtered.append(r)
             continue
@@ -109,7 +130,7 @@ def detect_rows(img):
 
 
 # ------------------------------------------------
-# SAMPLE BAR COLOR
+# SAMPLE SMALL COLOR SQUARE
 # ------------------------------------------------
 def sample_bar_color(img, y1, y2):
 
@@ -130,14 +151,14 @@ def sample_bar_color(img, y1, y2):
 
 
 # ------------------------------------------------
-# CALIBRATE COLORS USING HUE
+# KMEANS COLOR CALIBRATION
 # ------------------------------------------------
 def calibrate_colors(samples):
 
     colored = np.array([s for s in samples if s[1] > 25])
 
     if len(colored) < 3:
-        return None
+        return None,None
 
     data = colored[:,0].reshape(-1,1).astype(np.float32)
 
@@ -168,7 +189,7 @@ def calibrate_colors(samples):
         order[2]:"red"
     }
 
-    return centers, cluster_map
+    return centers,cluster_map
 
 
 # ------------------------------------------------
@@ -181,7 +202,7 @@ def classify_bar(sample, centers, cluster_map):
 
     h = sample[0]
 
-    dists = [abs(h - c) for c in centers]
+    dists = [abs(h-c) for c in centers]
 
     cluster = np.argmin(dists)
 
@@ -189,7 +210,7 @@ def classify_bar(sample, centers, cluster_map):
 
 
 # ------------------------------------------------
-# DEBUG DRAW
+# DEBUG OVERLAY
 # ------------------------------------------------
 def draw_debug(img, rows, scores):
 
@@ -216,7 +237,7 @@ def draw_debug(img, rows, scores):
             (X_LEFT,y1),
             (X_RIGHT,y2),
             colors[risk],
-            3
+            2
         )
 
     return debug
@@ -231,17 +252,16 @@ def parse_report(pdf_bytes, debug=False):
 
     img = np.array(images[1])
 
-    # NEW STAGE
-    img = normalize_colors(img)
+    normalized = normalize_colors(img)
 
-    rows = detect_rows(img)
+    rows = detect_rows(normalized)
 
     samples = []
 
     for y1,y2 in rows:
-        samples.append(sample_bar_color(img,y1,y2))
+        samples.append(sample_bar_color(normalized,y1,y2))
 
-    centers, cluster_map = calibrate_colors(samples)
+    centers,cluster_map = calibrate_colors(samples)
 
     scores = {}
 
@@ -258,7 +278,7 @@ def parse_report(pdf_bytes, debug=False):
 
     if debug:
 
-        overlay = draw_debug(img,rows,scores)
+        overlay = draw_debug(normalized,rows,scores)
 
         _,png = cv2.imencode(".png",overlay)
 
