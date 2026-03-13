@@ -2,46 +2,52 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v77_locked_column_classifier"
+ENGINE_NAME = "v78_locked_column_classifier"
 
-# LOCKED SAMPLING COLUMN
+# --------------------------------------------------
+# LOCKED SAMPLING COLUMN (confirmed correct)
+# --------------------------------------------------
+
 X_LEFT = 939
 X_RIGHT = 951
 
+# Height of sampling block
+BLOCK_HEIGHT = 16
+
+
 # --------------------------------------------------
-# DISEASE ROW COORDINATES
-# (reduced sampling height for accurate color read)
+# DISEASE ROW START POSITIONS (from grid measurement)
 # --------------------------------------------------
 
-ROW_MAP = {
+ROW_START = {
 
     # PANEL 1
-    "large_artery_stiffness": (911, 927),
-    "peripheral_vessel": (961, 977),
-    "blood_pressure_uncontrolled": (1011, 1027),
-    "small_medium_artery_stiffness": (1061, 1077),
-    "atherosclerosis": (1111, 1127),
-    "ldl_cholesterol": (1161, 1177),
-    "lv_hypertrophy": (1211, 1227),
-    "metabolic_syndrome": (1286, 1302),
-    "insulin_resistance": (1336, 1352),
-    "beta_cell_function_decreased": (1386, 1402),
-    "blood_glucose_uncontrolled": (1436, 1452),
-    "tissue_inflammatory_process": (1486, 1502),
+    "large_artery_stiffness": 920,
+    "peripheral_vessel": 950,
+    "blood_pressure_uncontrolled": 980,
+    "small_medium_artery_stiffness": 1010,
+    "atherosclerosis": 1040,
+    "ldl_cholesterol": 1075,
+    "lv_hypertrophy": 1110,
+    "metabolic_syndrome": 1175,
+    "insulin_resistance": 1200,
+    "beta_cell_function_decreased": 1230,
+    "blood_glucose_uncontrolled": 1265,
+    "tissue_inflammatory_process": 1290,
 
     # PANEL 2
-    "hypothyroidism": (1561, 1577),
-    "hyperthyroidism": (1611, 1627),
-    "hepatic_fibrosis": (1661, 1677),
-    "chronic_hepatitis": (1701, 1717),
-    "prostate_cancer": (1746, 1762),
-    "respiratory_disorders": (1796, 1812),
-    "kidney_function_disorders": (1846, 1862),
-    "digestive_disorders": (1896, 1912),
-    "major_depression": (1991, 2007),
-    "adhd_children_learning": (2031, 2047),
-    "cerebral_dopamine_decreased": (2086, 2102),
-    "cerebral_serotonin_decreased": (2121, 2137),
+    "hypothyroidism": 1525,
+    "hyperthyroidism": 1560,
+    "hepatic_fibrosis": 1585,
+    "chronic_hepatitis": 1625,
+    "prostate_cancer": 1655,
+    "respiratory_disorders": 1680,
+    "kidney_function_disorders": 1715,
+    "digestive_disorders": 1750,
+    "major_depression": 1815,
+    "adhd_children_learning": 1840,
+    "cerebral_dopamine_decreased": 1870,
+    "cerebral_serotonin_decreased": 1900,
 }
 
 
@@ -76,7 +82,7 @@ def extract_scores(pdf_bytes, debug=False):
 
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    # PAGE 2 contains disease bars
+    # Disease panels are on page 2
     img = np.array(pages[1])
 
     scores = {}
@@ -85,7 +91,7 @@ def extract_scores(pdf_bytes, debug=False):
 
     height = img.shape[0]
 
-    # draw locked sampling column
+    # Draw locked sampling column
     if debug:
         cv2.rectangle(
             debug_img,
@@ -95,9 +101,11 @@ def extract_scores(pdf_bytes, debug=False):
             2
         )
 
-    for disease, (y1, y2) in ROW_MAP.items():
+    for disease, start_y in ROW_START.items():
 
-        region = img[y1:y2, X_LEFT:X_RIGHT]
+        end_y = start_y + BLOCK_HEIGHT
+
+        region = img[start_y:end_y, X_LEFT:X_RIGHT]
 
         mean_color = np.mean(region.reshape(-1, 3), axis=0)
 
@@ -108,8 +116,8 @@ def extract_scores(pdf_bytes, debug=False):
         if debug:
             cv2.rectangle(
                 debug_img,
-                (X_LEFT, y1),
-                (X_RIGHT, y2),
+                (X_LEFT, start_y),
+                (X_RIGHT, end_y),
                 (0, 255, 0),
                 2
             )
