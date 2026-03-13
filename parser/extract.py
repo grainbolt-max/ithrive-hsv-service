@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v105_indicator_square_classifier"
+ENGINE_NAME = "v106_indicator_square_classifier"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -85,19 +85,19 @@ def sample_square(img, y):
 
 def classify_color(h, s, v):
 
-    # NONE / LOW RISK
+    # NONE / LOW
     if s < 60:
         return None
 
-    # YELLOW (mild)
+    # YELLOW
     if h > 22:
         return "yellow"
 
     # RED (darker)
-    if v < 180:
+    if v < 210:
         return "red"
 
-    # ORANGE (brighter)
+    # ORANGE
     return "orange"
 
 
