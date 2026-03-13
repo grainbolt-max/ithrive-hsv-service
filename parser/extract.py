@@ -2,12 +2,12 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v71_hue_threshold_fix"
+ENGINE_NAME = "v72_blue_intensity_classifier"
 
-# BAR COLUMN (exact position on ITHRIVE reports at dpi=200)
+# Exact bar column location at dpi=200
 X_LEFT = 937
 
-# Detection window
+# Vertical scan range for disease bars
 MIN_Y = 880
 MAX_Y = 2050
 
@@ -19,6 +19,7 @@ DISEASES = [
 "atherosclerosis",
 "ldl_cholesterol",
 "lv_hypertrophy",
+"diabetes",
 "metabolic_syndrome",
 "insulin_resistance",
 "beta_cell_function_decreased",
@@ -45,7 +46,7 @@ def detect_rows(img):
 
     DETECT_X = X_LEFT - 10
 
-    column = img[MIN_Y:MAX_Y, DETECT_X:DETECT_X+40]
+    column = img[MIN_Y:MAX_Y, DETECT_X:DETECT_X + 40]
 
     gray = cv2.cvtColor(column, cv2.COLOR_BGR2GRAY)
 
@@ -66,7 +67,7 @@ def detect_rows(img):
             end = y
 
             if 10 < (end-start) < 40:
-                rows.append((start+MIN_Y,end+MIN_Y))
+                rows.append((start + MIN_Y, end + MIN_Y))
 
             inside = False
 
@@ -85,7 +86,7 @@ def detect_rows(img):
 # ------------------------------------------------
 def sample_bar_color(img, y1, y2):
 
-    mid = int((y1+y2)/2)
+    mid = int((y1 + y2) / 2)
 
     bar_zone = img[mid-3:mid+3, X_LEFT-80:X_LEFT+50]
 
@@ -93,7 +94,7 @@ def sample_bar_color(img, y1, y2):
 
     for x in range(hsv.shape[1]):
 
-        if hsv[0,x,1] > 40:   # find real colored pixel
+        if hsv[0,x,1] > 40:
 
             h = int(hsv[0,x,0])
             s = int(hsv[0,x,1])
@@ -111,26 +112,25 @@ def classify_bar(sample):
 
     h, s, v = sample
 
+    # ignore background / grey
     if s < 30:
         return "grey"
 
-    # red
-    if h < 10 or h > 170:
+    # darker blue = higher risk
+    if v < 110:
         return "red"
 
-    # orange
-    if 10 <= h < 28:
+    if 110 <= v < 170:
         return "orange"
 
-    # yellow
-    if 28 <= h <= 70:
+    if v >= 170:
         return "yellow"
 
     return "grey"
 
 
 # ------------------------------------------------
-# DEBUG DRAW
+# DEBUG OVERLAY
 # ------------------------------------------------
 def draw_debug(img, rows, scores):
 
