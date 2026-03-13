@@ -2,18 +2,23 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v87_locked_column_bar_classifier"
+ENGINE_NAME = "v90_multi_sample_bar_classifier"
 
 # --------------------------------------------------
-# LOCKED SAMPLING COLUMN
+# LOCKED SAMPLING REGION
 # --------------------------------------------------
 
 X_LEFT = 939
 X_RIGHT = 951
+
 BLOCK_HEIGHT = 16
 
+# sample 5 vertical columns inside region
+SAMPLE_POINTS = 5
+
+
 # --------------------------------------------------
-# LOCKED ROW COORDINATES
+# ROW START COORDINATES
 # --------------------------------------------------
 
 ROW_START = {
@@ -47,6 +52,7 @@ ROW_START = {
     "cerebral_serotonin_decreased": 1910,
 }
 
+
 # --------------------------------------------------
 # DEBUG COLORS
 # --------------------------------------------------
@@ -55,37 +61,38 @@ COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    None: (160,160,160)
+    None: (150,150,150)
 }
 
+
 # --------------------------------------------------
-# SAMPLE BAR COLOR
+# SAMPLE MULTIPLE POINTS
 # --------------------------------------------------
 
 def sample_bar_color(img, y):
 
-    block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
+    hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    hsv = cv2.cvtColor(block, cv2.COLOR_BGR2HSV)
+    hues = []
 
-    h = hsv[:,:,0]
-    s = hsv[:,:,1]
+    xs = np.linspace(X_LEFT, X_RIGHT, SAMPLE_POINTS).astype(int)
 
-    mean_h = np.mean(h)
-    mean_s = np.mean(s)
+    for x in xs:
 
-    # --------------------------------------------------
-    # FILTER TEXT / GRAY ROWS
-    # --------------------------------------------------
+        block = hsv_img[y:y+BLOCK_HEIGHT, x:x+2]
 
-    if mean_s < 60:
+        h = np.mean(block[:,:,0])
+        s = np.mean(block[:,:,1])
+
+        # ignore white/gray pixels
+        if s > 60:
+            hues.append(h)
+
+    if len(hues) == 0:
         return None
 
-    # remove rows with mixed pixels (text edges)
-    if np.std(h) > 8:
-        return None
+    return np.mean(hues)
 
-    return mean_h
 
 # --------------------------------------------------
 # CLASSIFY COLOR
@@ -96,29 +103,22 @@ def classify_color(h):
     if h is None:
         return None
 
-    # these ranges match the bar colors in the report
     if h < 25:
         return "yellow"
 
-    if 25 <= h < 45:
+    if h < 45:
         return "orange"
 
-    if h >= 45:
-        return "red"
+    return "red"
 
-    return None
 
 # --------------------------------------------------
-# MAIN EXTRACTION
+# MAIN PARSER
 # --------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
-    # DPI LOCKED — DO NOT CHANGE
     pages = convert_from_bytes(pdf_bytes, dpi=200)
-
-    if len(pages) < 2:
-        raise Exception("PDF missing page 2")
 
     page = pages[1]
 
@@ -158,8 +158,8 @@ def extract_scores(pdf_bytes, debug=False):
 
     if debug:
 
-        cv2.line(img, (X_LEFT,0), (X_LEFT,img.shape[0]), (255,0,0), 2)
-        cv2.line(img, (X_RIGHT,0), (X_RIGHT,img.shape[0]), (255,0,0), 2)
+        cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
+        cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
 
         ok, png = cv2.imencode(".png", img)
 
