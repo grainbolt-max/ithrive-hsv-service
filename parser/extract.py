@@ -2,24 +2,24 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v73_true_row_centers"
+ENGINE_NAME = "v74_locked_column_classifier"
 
 # ------------------------------------------------
-# BAR SAMPLING COLUMN
+# LOCKED COLOR SAMPLING COLUMN
 # ------------------------------------------------
 
-X_LEFT = 939
-X_RIGHT = 954
+X_LEFT = 942
+X_RIGHT = 951
 
 # ------------------------------------------------
-# EXACT ROW CENTERS
+# ROW CENTERS (derived from your measured ranges)
 # ------------------------------------------------
 
 ROWS = [
-1387,1437,1487,1537,1587,1637,
-1687,1762,1812,1862,1912,1962,
-2305,2352,2405,2442,2487,2537,
-2587,2637,2732,2772,2827,2862
+1387, 1437, 1487, 1537, 1587, 1637,
+1687, 1762, 1812, 1862, 1912, 1962,
+2305, 2352, 2405, 2442, 2487, 2537,
+2587, 2637, 2732, 2772, 2827, 2862
 ]
 
 # ------------------------------------------------
@@ -54,7 +54,7 @@ DISEASES = [
 ]
 
 # ------------------------------------------------
-# SAMPLE COLOR
+# SAMPLE COLOR FROM BAR
 # ------------------------------------------------
 
 def sample_bar_color(img, y):
@@ -70,14 +70,14 @@ def sample_bar_color(img, y):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    return h,s,v
+    return h, s, v
 
 
 # ------------------------------------------------
 # CLASSIFY COLOR
 # ------------------------------------------------
 
-def classify_bar(h,s,v):
+def classify_bar(h, s, v):
 
     if s < 40:
         return None
@@ -102,12 +102,22 @@ def draw_debug(img):
 
     overlay = img.copy()
 
+    # draw sampling column
+    cv2.rectangle(
+        overlay,
+        (X_LEFT, 0),
+        (X_RIGHT, img.shape[0]),
+        (255,0,0),
+        2
+    )
+
+    # draw row markers
     for y in ROWS:
 
         cv2.rectangle(
             overlay,
-            (X_LEFT-10, y-8),
-            (X_RIGHT+10, y+8),
+            (X_LEFT-8, y-8),
+            (X_RIGHT+8, y+8),
             (0,255,0),
             2
         )
@@ -121,7 +131,8 @@ def draw_debug(img):
 
 def parse_report(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    # IMPORTANT: 300 DPI so coordinates match measured values
+    pages = convert_from_bytes(pdf_bytes, dpi=300)
 
     if len(pages) < 2:
         raise Exception("PDF missing disease screening page")
@@ -140,15 +151,15 @@ def parse_report(pdf_bytes, debug=False):
             scores[disease] = None
             continue
 
-        h,s,v = color
+        h, s, v = color
 
-        scores[disease] = classify_bar(h,s,v)
+        scores[disease] = classify_bar(h, s, v)
 
     if debug:
 
         overlay = draw_debug(img)
 
-        ok,png = cv2.imencode(".png",overlay)
+        ok, png = cv2.imencode(".png", overlay)
 
         return png.tobytes()
 
@@ -159,6 +170,10 @@ def parse_report(pdf_bytes, debug=False):
         "scores": ordered_scores
     }
 
+
+# ------------------------------------------------
+# EXTERNAL ENTRYPOINT
+# ------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
     return parse_report(pdf_bytes, debug=debug)
