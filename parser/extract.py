@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v106_indicator_square_classifier"
+ENGINE_NAME = "v107_indicator_square_center_sample"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -58,19 +58,22 @@ COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    None: (150,150,150)
+    None: (160,160,160)
 }
 
 
 # --------------------------------------------------
-# SAMPLE INDICATOR SQUARE
+# SAMPLE INDICATOR SQUARE (CENTER ONLY)
 # --------------------------------------------------
 
 def sample_square(img, y):
 
-    block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
+    mid = y + BLOCK_HEIGHT // 2
 
-    hsv = cv2.cvtColor(block, cv2.COLOR_BGR2HSV)
+    # sample only the center of the indicator square
+    sample = img[mid-2:mid+2, X_LEFT+4:X_RIGHT-4]
+
+    hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
 
     h = np.mean(hsv[:,:,0])
     s = np.mean(hsv[:,:,1])
