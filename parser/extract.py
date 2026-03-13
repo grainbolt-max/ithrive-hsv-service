@@ -2,93 +2,62 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v70_header_anchor_classifier"
+ENGINE_NAME = "v71_fixed_row_classifier"
 
-# column where the risk bars exist
+# ------------------------------------------------
+# BAR SAMPLING COLUMN
+# ------------------------------------------------
+
 X_LEFT = 939
 X_RIGHT = 954
 
-# diseases in order
-DISEASES = [
-    "large_artery_stiffness",
-    "peripheral_vessel",
-    "blood_pressure_uncontrolled",
-    "small_medium_artery_stiffness",
-    "atherosclerosis",
-    "ldl_cholesterol",
-    "lv_hypertrophy",
-    "metabolic_syndrome",
-    "insulin_resistance",
-    "beta_cell_function_decreased",
-    "blood_glucose_uncontrolled",
-    "tissue_inflammatory_process",
-    "hypothyroidism",
-    "hyperthyroidism",
-    "hepatic_fibrosis",
-    "chronic_hepatitis",
-    "prostate_cancer",
-    "respiratory_disorders",
-    "kidney_function_disorders",
-    "digestive_disorders",
-    "major_depression",
-    "adhd_children_learning",
-    "cerebral_dopamine_decreased",
-    "cerebral_serotonin_decreased",
+# ------------------------------------------------
+# EXACT ROW CENTERS
+# (measured from the report layout)
+# ------------------------------------------------
+
+ROWS = [
+880, 925, 970, 1015, 1060,
+1105, 1150, 1200, 1245, 1290,
+1335, 1380, 1450, 1495, 1540,
+1585, 1630, 1675, 1720, 1765,
+1810, 1855, 1900, 1945
 ]
 
+# ------------------------------------------------
+# DISEASE ORDER
+# ------------------------------------------------
 
-# -------------------------------------------------
-# Detect disease table rows using header anchor
-# -------------------------------------------------
+DISEASES = [
+"large_artery_stiffness",
+"peripheral_vessel",
+"blood_pressure_uncontrolled",
+"small_medium_artery_stiffness",
+"atherosclerosis",
+"ldl_cholesterol",
+"lv_hypertrophy",
+"metabolic_syndrome",
+"insulin_resistance",
+"beta_cell_function_decreased",
+"blood_glucose_uncontrolled",
+"tissue_inflammatory_process",
+"hypothyroidism",
+"hyperthyroidism",
+"hepatic_fibrosis",
+"chronic_hepatitis",
+"prostate_cancer",
+"respiratory_disorders",
+"kidney_function_disorders",
+"digestive_disorders",
+"major_depression",
+"adhd_children_learning",
+"cerebral_dopamine_decreased",
+"cerebral_serotonin_decreased"
+]
 
-def detect_rows(img):
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # search area where disease header exists
-    header_region = gray[900:1100, 400:1600]
-
-    edges = cv2.Canny(header_region, 50, 150)
-
-    lines = cv2.HoughLinesP(
-        edges,
-        1,
-        np.pi / 180,
-        threshold=100,
-        minLineLength=600,
-        maxLineGap=10
-    )
-
-    header_y = None
-
-    if lines is not None:
-        for line in lines:
-            x1,y1,x2,y2 = line[0]
-
-            if abs(y1-y2) < 3 and (x2-x1) > 800:
-                header_y = y1 + 900
-                break
-
-    if header_y is None:
-        raise Exception("Could not detect disease table header")
-
-    # offsets from the header to each row center
-    row_offsets = [
-        120,165,210,255,300,
-        345,390,450,495,540,
-        585,630,700,745,790,
-        835,880,925,970,1015,
-        1060,1105,1150,1195
-    ]
-
-    rows = [header_y + offset for offset in row_offsets]
-
-    return rows
-
-
-# -------------------------------------------------
-# Sample color from risk bar
-# -------------------------------------------------
+# ------------------------------------------------
+# SAMPLE COLOR
+# ------------------------------------------------
 
 def sample_bar_color(img, y):
 
@@ -106,9 +75,9 @@ def sample_bar_color(img, y):
     return h,s,v
 
 
-# -------------------------------------------------
-# Classify HSV color
-# -------------------------------------------------
+# ------------------------------------------------
+# CLASSIFY COLOR
+# ------------------------------------------------
 
 def classify_bar(h,s,v):
 
@@ -127,15 +96,15 @@ def classify_bar(h,s,v):
     return None
 
 
-# -------------------------------------------------
-# Debug overlay
-# -------------------------------------------------
+# ------------------------------------------------
+# DEBUG OVERLAY
+# ------------------------------------------------
 
-def draw_debug(img, rows):
+def draw_debug(img):
 
     overlay = img.copy()
 
-    for y in rows:
+    for y in ROWS:
 
         cv2.rectangle(
             overlay,
@@ -148,9 +117,9 @@ def draw_debug(img, rows):
     return overlay
 
 
-# -------------------------------------------------
-# Main parser
-# -------------------------------------------------
+# ------------------------------------------------
+# MAIN PARSER
+# ------------------------------------------------
 
 def parse_report(pdf_bytes, debug=False):
 
@@ -163,11 +132,9 @@ def parse_report(pdf_bytes, debug=False):
 
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-    rows = detect_rows(img)
-
     scores = {}
 
-    for disease, y in zip(DISEASES, rows):
+    for disease, y in zip(DISEASES, ROWS):
 
         color = sample_bar_color(img, y)
 
@@ -181,9 +148,9 @@ def parse_report(pdf_bytes, debug=False):
 
     if debug:
 
-        overlay = draw_debug(img, rows)
+        overlay = draw_debug(img)
 
-        ok, png = cv2.imencode(".png", overlay)
+        ok,png = cv2.imencode(".png",overlay)
 
         return png.tobytes()
 
@@ -195,10 +162,5 @@ def parse_report(pdf_bytes, debug=False):
     }
 
 
-# -------------------------------------------------
-# External entrypoint
-# -------------------------------------------------
-
 def extract_scores(pdf_bytes, debug=False):
-
     return parse_report(pdf_bytes, debug=debug)
