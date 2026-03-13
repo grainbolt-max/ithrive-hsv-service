@@ -2,21 +2,19 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v91_locked_bar_sampler"
+ENGINE_NAME = "v100_indicator_square_classifier"
 
 # --------------------------------------------------
-# LOCKED SAMPLING REGION (inside the disease bar)
+# LOCKED SAMPLING REGION (indicator square)
 # --------------------------------------------------
 
-X_LEFT = 965
-X_RIGHT = 990
+X_LEFT = 939
+X_RIGHT = 951
 
 BLOCK_HEIGHT = 14
-SAMPLE_POINTS = 5
-
 
 # --------------------------------------------------
-# ROW START COORDINATES (YOUR CALIBRATED VALUES)
+# ROW START COORDINATES
 # --------------------------------------------------
 
 ROW_START = {
@@ -50,7 +48,6 @@ ROW_START = {
     "cerebral_serotonin_decreased": 1910,
 }
 
-
 # --------------------------------------------------
 # DEBUG COLORS
 # --------------------------------------------------
@@ -62,74 +59,58 @@ COLOR_MAP = {
     None: (150,150,150)
 }
 
-
 # --------------------------------------------------
-# SAMPLE BAR COLOR (MULTI POINT)
-# --------------------------------------------------
-
-def sample_bar_color(img, y):
-
-    hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    hues = []
-
-    xs = np.linspace(X_LEFT, X_RIGHT, SAMPLE_POINTS).astype(int)
-
-    for x in xs:
-
-        block = hsv_img[y:y+BLOCK_HEIGHT, x:x+2]
-
-        h = np.mean(block[:,:,0])
-        s = np.mean(block[:,:,1])
-
-        # ignore white / gray areas
-        if s > 60:
-            hues.append(h)
-
-    if len(hues) == 0:
-        return None
-
-    return np.mean(hues)
-
-
-# --------------------------------------------------
-# CLASSIFY COLOR FROM HUE
+# CLASSIFY SQUARE COLOR
 # --------------------------------------------------
 
-def classify_color(h):
+def classify_square(mean_bgr):
 
-    if h is None:
-        return None
+    b,g,r = mean_bgr
 
-    if h < 25:
+    if r > 200 and g > 200:
         return "yellow"
 
-    if h < 45:
+    if r > 200 and g > 100:
         return "orange"
 
-    return "red"
+    if r > 200 and g < 100:
+        return "red"
+
+    return None
+
+
+# --------------------------------------------------
+# SAMPLE SQUARE
+# --------------------------------------------------
+
+def sample_square(img,y):
+
+    block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
+
+    mean = np.mean(block.reshape(-1,3),axis=0)
+
+    return mean
 
 
 # --------------------------------------------------
 # MAIN PARSER
 # --------------------------------------------------
 
-def extract_scores(pdf_bytes, debug=False):
+def extract_scores(pdf_bytes,debug=False):
 
-    # DPI MUST STAY 200 (DO NOT CHANGE)
-    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    pages = convert_from_bytes(pdf_bytes,dpi=200)
 
     page = pages[1]
 
-    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+    img = cv2.cvtColor(np.array(page),cv2.COLOR_RGB2BGR)
 
     scores = {}
 
-    for disease, y in ROW_START.items():
+    for disease,y in ROW_START.items():
 
-        hue = sample_bar_color(img, y)
+        mean = sample_square(img,y)
 
-        risk = classify_color(hue)
+        risk = classify_square(mean)
 
         scores[disease] = risk
 
@@ -139,20 +120,10 @@ def extract_scores(pdf_bytes, debug=False):
 
             cv2.rectangle(
                 img,
-                (X_LEFT, y),
-                (X_RIGHT, y + BLOCK_HEIGHT),
+                (X_LEFT,y),
+                (X_RIGHT,y+BLOCK_HEIGHT),
                 color,
                 2
-            )
-
-            cv2.putText(
-                img,
-                disease,
-                (X_RIGHT + 8, y + 12),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.35,
-                (255,255,255),
-                1
             )
 
     if debug:
@@ -160,11 +131,11 @@ def extract_scores(pdf_bytes, debug=False):
         cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
         cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
 
-        ok, png = cv2.imencode(".png", img)
+        ok,png = cv2.imencode(".png",img)
 
         return png.tobytes()
 
     return {
-        "engine": ENGINE_NAME,
-        "scores": scores
+        "engine":ENGINE_NAME,
+        "scores":scores
     }
