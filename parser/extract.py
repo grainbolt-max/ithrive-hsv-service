@@ -2,19 +2,13 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v70_width_based_classifier"
+ENGINE_NAME = "v70_header_anchor_classifier"
 
-CURRENT_DPI = 200
+# column where the risk bars exist
+X_LEFT = 939
+X_RIGHT = 954
 
-# Relative column position (percentage of page width)
-BAR_X_RATIO = 0.46
-BAR_WIDTH_RATIO = 0.015
-
-# Detection window ratios
-MIN_Y_RATIO = 0.42
-MAX_Y_RATIO = 0.98
-ROW_HEIGHT_RATIO = 0.022
-
+# diseases in order
 DISEASES = [
     "large_artery_stiffness",
     "peripheral_vessel",
@@ -43,42 +37,80 @@ DISEASES = [
 ]
 
 
-def detect_rows(img_height):
-    min_y = int(img_height * MIN_Y_RATIO)
-    row_height = int(img_height * ROW_HEIGHT_RATIO)
+# -------------------------------------------------
+# Detect disease table rows using header anchor
+# -------------------------------------------------
 
-    rows = []
-    y = min_y
+def detect_rows(img):
 
-    for _ in range(len(DISEASES)):
-        rows.append(int(y))
-        y += row_height
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # search area where disease header exists
+    header_region = gray[900:1100, 400:1600]
+
+    edges = cv2.Canny(header_region, 50, 150)
+
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=100,
+        minLineLength=600,
+        maxLineGap=10
+    )
+
+    header_y = None
+
+    if lines is not None:
+        for line in lines:
+            x1,y1,x2,y2 = line[0]
+
+            if abs(y1-y2) < 3 and (x2-x1) > 800:
+                header_y = y1 + 900
+                break
+
+    if header_y is None:
+        raise Exception("Could not detect disease table header")
+
+    # offsets from the header to each row center
+    row_offsets = [
+        120,165,210,255,300,
+        345,390,450,495,540,
+        585,630,700,745,790,
+        835,880,925,970,1015,
+        1060,1105,1150,1195
+    ]
+
+    rows = [header_y + offset for offset in row_offsets]
 
     return rows
 
 
-def compute_bar_column(img_width):
-    x_left = int(img_width * BAR_X_RATIO)
-    x_right = x_left + int(img_width * BAR_WIDTH_RATIO)
-    return x_left, x_right
+# -------------------------------------------------
+# Sample color from risk bar
+# -------------------------------------------------
 
+def sample_bar_color(img, y):
 
-def sample_bar_color(img, y, x_left, x_right):
-    crop = img[y - 6:y + 6, x_left:x_right]
+    crop = img[y-6:y+6, X_LEFT:X_RIGHT]
 
     if crop.size == 0:
         return None
 
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
 
-    h = np.mean(hsv[:, :, 0])
-    s = np.mean(hsv[:, :, 1])
-    v = np.mean(hsv[:, :, 2])
+    h = np.mean(hsv[:,:,0])
+    s = np.mean(hsv[:,:,1])
+    v = np.mean(hsv[:,:,2])
 
-    return h, s, v
+    return h,s,v
 
 
-def classify_bar(h, s, v):
+# -------------------------------------------------
+# Classify HSV color
+# -------------------------------------------------
+
+def classify_bar(h,s,v):
 
     if s < 40:
         return None
@@ -95,34 +127,34 @@ def classify_bar(h, s, v):
     return None
 
 
-def draw_debug(img, rows, scores, x_left, x_right):
+# -------------------------------------------------
+# Debug overlay
+# -------------------------------------------------
+
+def draw_debug(img, rows):
+
     overlay = img.copy()
 
-    height = img.shape[0]
-
-    cv2.rectangle(
-        overlay,
-        (x_left, int(height * MIN_Y_RATIO)),
-        (x_right, int(height * MAX_Y_RATIO)),
-        (255, 0, 0),
-        2
-    )
-
     for y in rows:
+
         cv2.rectangle(
             overlay,
-            (x_left - 10, y - 8),
-            (x_right + 10, y + 8),
-            (0, 255, 0),
-            1
+            (X_LEFT-10, y-8),
+            (X_RIGHT+10, y+8),
+            (0,255,0),
+            2
         )
 
     return overlay
 
 
+# -------------------------------------------------
+# Main parser
+# -------------------------------------------------
+
 def parse_report(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes, dpi=CURRENT_DPI)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if len(pages) < 2:
         raise Exception("PDF missing disease screening page")
@@ -131,29 +163,28 @@ def parse_report(pdf_bytes, debug=False):
 
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
-    height, width = img.shape[:2]
-
-    x_left, x_right = compute_bar_column(width)
-
-    rows = detect_rows(height)
+    rows = detect_rows(img)
 
     scores = {}
 
     for disease, y in zip(DISEASES, rows):
 
-        color = sample_bar_color(img, y, x_left, x_right)
+        color = sample_bar_color(img, y)
 
         if color is None:
             scores[disease] = None
             continue
 
-        h, s, v = color
+        h,s,v = color
 
-        scores[disease] = classify_bar(h, s, v)
+        scores[disease] = classify_bar(h,s,v)
 
     if debug:
-        overlay = draw_debug(img, rows, scores, x_left, x_right)
+
+        overlay = draw_debug(img, rows)
+
         ok, png = cv2.imencode(".png", overlay)
+
         return png.tobytes()
 
     ordered_scores = {d: scores.get(d) for d in DISEASES}
@@ -164,5 +195,10 @@ def parse_report(pdf_bytes, debug=False):
     }
 
 
+# -------------------------------------------------
+# External entrypoint
+# -------------------------------------------------
+
 def extract_scores(pdf_bytes, debug=False):
+
     return parse_report(pdf_bytes, debug=debug)
