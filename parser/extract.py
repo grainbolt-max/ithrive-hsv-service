@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v102_indicator_square_classifier"
+ENGINE_NAME = "v103_indicator_square_classifier"
 
 # --------------------------------------------------
-# LOCKED SAMPLING REGION
+# LOCKED SAMPLING REGION (indicator square)
 # --------------------------------------------------
 
 X_LEFT = 939
@@ -14,7 +14,7 @@ X_RIGHT = 960
 BLOCK_HEIGHT = 14
 
 # --------------------------------------------------
-# ROW START COORDINATES
+# ROW START COORDINATES (LOCKED)
 # --------------------------------------------------
 
 ROW_START = {
@@ -60,7 +60,7 @@ COLOR_MAP = {
 }
 
 # --------------------------------------------------
-# SAMPLE COLOR
+# SAMPLE COLOR FROM INDICATOR SQUARE
 # --------------------------------------------------
 
 def sample_square(img, y):
@@ -73,28 +73,28 @@ def sample_square(img, y):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    return h,s,v
+    return h, s, v
 
 # --------------------------------------------------
 # CLASSIFY COLOR
 # --------------------------------------------------
 
-def classify_square(h,s,v):
+def classify_square(h, s, v):
 
     # NONE / LOW RISK
     if s < 60:
         return None
 
-    # RED
-    if h < 8:
+    # YELLOW (mild)
+    if h > 20:
+        return "yellow"
+
+    # RED (severe)
+    if s > 200 and v < 220:
         return "red"
 
-    # ORANGE
-    if h < 20:
-        return "orange"
-
-    # YELLOW
-    return "yellow"
+    # ORANGE (moderate)
+    return "orange"
 
 # --------------------------------------------------
 # MAIN PARSER
@@ -110,11 +110,11 @@ def extract_scores(pdf_bytes, debug=False):
 
     scores = {}
 
-    for disease,y in ROW_START.items():
+    for disease, y in ROW_START.items():
 
-        h,s,v = sample_square(img,y)
+        h, s, v = sample_square(img, y)
 
-        risk = classify_square(h,s,v)
+        risk = classify_square(h, s, v)
 
         scores[disease] = risk
 
@@ -126,8 +126,8 @@ def extract_scores(pdf_bytes, debug=False):
 
             cv2.rectangle(
                 img,
-                (X_LEFT,y),
-                (X_RIGHT,y+BLOCK_HEIGHT),
+                (X_LEFT, y),
+                (X_RIGHT, y + BLOCK_HEIGHT),
                 color,
                 2
             )
@@ -137,11 +137,11 @@ def extract_scores(pdf_bytes, debug=False):
         cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
         cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
 
-        ok,png = cv2.imencode(".png",img)
+        ok, png = cv2.imencode(".png", img)
 
         return png.tobytes()
 
     return {
-        "engine":ENGINE_NAME,
-        "scores":scores
+        "engine": ENGINE_NAME,
+        "scores": scores
     }
