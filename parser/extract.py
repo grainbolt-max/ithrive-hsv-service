@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v67_auto_calibrated_hue_classifier"
+ENGINE_NAME = "v68_blue_normalized_auto_calibrated"
 
 # Locked sampling column
 X_LEFT = 938
@@ -41,6 +41,32 @@ DISEASES = [
 
 
 # ------------------------------------------------
+# COLOR NORMALIZATION (convert risk colors → blue palette)
+# ------------------------------------------------
+def normalize_colors(img):
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    # yellow → cyan
+    mask_yellow = cv2.inRange(hsv, (20,80,80), (35,255,255))
+    hsv[:,:,0][mask_yellow > 0] = 90
+
+    # orange → blue
+    mask_orange = cv2.inRange(hsv, (10,80,80), (20,255,255))
+    hsv[:,:,0][mask_orange > 0] = 110
+
+    # red → dark blue
+    mask_red1 = cv2.inRange(hsv, (0,80,80), (10,255,255))
+    mask_red2 = cv2.inRange(hsv, (170,80,80), (180,255,255))
+    mask_red = cv2.bitwise_or(mask_red1, mask_red2)
+    hsv[:,:,0][mask_red > 0] = 130
+
+    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    return img
+
+
+# ------------------------------------------------
 # ROW DETECTION
 # ------------------------------------------------
 def detect_rows(img):
@@ -70,6 +96,7 @@ def detect_rows(img):
             inside = False
 
     filtered = []
+
     for r in rows:
         if not filtered:
             filtered.append(r)
@@ -82,7 +109,7 @@ def detect_rows(img):
 
 
 # ------------------------------------------------
-# SAMPLE BAR COLOR (FIXED SAMPLING WINDOW)
+# SAMPLE BAR COLOR
 # ------------------------------------------------
 def sample_bar_color(img, y1, y2):
 
@@ -203,6 +230,9 @@ def parse_report(pdf_bytes, debug=False):
     images = convert_from_bytes(pdf_bytes, dpi=200)
 
     img = np.array(images[1])
+
+    # NEW STAGE: color normalization
+    img = normalize_colors(img)
 
     rows = detect_rows(img)
 
