@@ -2,15 +2,13 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v68_deterministic_hsv_classifier"
-
-# Locked sampling column
-X_LEFT = 939
-X_RIGHT = 954
+ENGINE_NAME = "v69_width_locked_classifier"
 
 # Detection window
 MIN_Y = 880
 MAX_Y = 2050
+
+ROW_HEIGHT = 46
 
 DISEASES = [
     "large_artery_stiffness",
@@ -39,8 +37,6 @@ DISEASES = [
     "cerebral_serotonin_decreased",
 ]
 
-ROW_HEIGHT = 46
-
 
 def detect_rows():
     rows = []
@@ -53,8 +49,20 @@ def detect_rows():
     return rows
 
 
-def sample_bar_color(img, y):
-    crop = img[y - 6:y + 6, X_LEFT:X_RIGHT]
+def compute_sampling_column(img):
+
+    width = img.shape[1]
+
+    # Bars are roughly 38% across page width
+    x_left = int(width * 0.38)
+    x_right = x_left + 15
+
+    return x_left, x_right
+
+
+def sample_bar_color(img, y, x_left, x_right):
+
+    crop = img[y - 6:y + 6, x_left:x_right]
 
     if crop.size == 0:
         return None
@@ -85,15 +93,15 @@ def classify_bar(h, s, v):
     return None
 
 
-def draw_debug(img, rows, scores):
+def draw_debug(img, rows, scores, x_left, x_right):
 
     overlay = img.copy()
 
     # draw sampling column
     cv2.rectangle(
         overlay,
-        (X_LEFT, MIN_Y),
-        (X_RIGHT, MAX_Y),
+        (x_left, MIN_Y),
+        (x_right, MAX_Y),
         (255, 0, 0),
         2
     )
@@ -103,8 +111,8 @@ def draw_debug(img, rows, scores):
 
         cv2.rectangle(
             overlay,
-            (X_LEFT - 10, y - 8),
-            (X_RIGHT + 10, y + 8),
+            (x_left - 10, y - 8),
+            (x_right + 10, y + 8),
             (0, 255, 0),
             1
         )
@@ -125,11 +133,13 @@ def parse_report(pdf_bytes, debug=False):
 
     rows = detect_rows()
 
+    x_left, x_right = compute_sampling_column(img)
+
     scores = {}
 
     for disease, y in zip(DISEASES, rows):
 
-        color = sample_bar_color(img, y)
+        color = sample_bar_color(img, y, x_left, x_right)
 
         if color is None:
             scores[disease] = None
@@ -141,7 +151,7 @@ def parse_report(pdf_bytes, debug=False):
 
     if debug:
 
-        overlay = draw_debug(img, rows, scores)
+        overlay = draw_debug(img, rows, scores, x_left, x_right)
 
         ok, png = cv2.imencode(".png", overlay)
 
