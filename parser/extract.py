@@ -2,23 +2,21 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v90_multi_sample_bar_classifier"
+ENGINE_NAME = "v91_locked_bar_sampler"
 
 # --------------------------------------------------
-# LOCKED SAMPLING REGION
+# LOCKED SAMPLING REGION (inside the disease bar)
 # --------------------------------------------------
 
-X_LEFT = 939
-X_RIGHT = 951
+X_LEFT = 965
+X_RIGHT = 990
 
-BLOCK_HEIGHT = 16
-
-# sample 5 vertical columns inside region
+BLOCK_HEIGHT = 14
 SAMPLE_POINTS = 5
 
 
 # --------------------------------------------------
-# ROW START COORDINATES
+# ROW START COORDINATES (YOUR CALIBRATED VALUES)
 # --------------------------------------------------
 
 ROW_START = {
@@ -66,7 +64,7 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# SAMPLE MULTIPLE POINTS
+# SAMPLE BAR COLOR (MULTI POINT)
 # --------------------------------------------------
 
 def sample_bar_color(img, y):
@@ -84,7 +82,7 @@ def sample_bar_color(img, y):
         h = np.mean(block[:,:,0])
         s = np.mean(block[:,:,1])
 
-        # ignore white/gray pixels
+        # ignore white / gray areas
         if s > 60:
             hues.append(h)
 
@@ -95,7 +93,7 @@ def sample_bar_color(img, y):
 
 
 # --------------------------------------------------
-# CLASSIFY COLOR
+# CLASSIFY COLOR FROM HUE
 # --------------------------------------------------
 
 def classify_color(h):
@@ -118,6 +116,7 @@ def classify_color(h):
 
 def extract_scores(pdf_bytes, debug=False):
 
+    # DPI MUST STAY 200 (DO NOT CHANGE)
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     page = pages[1]
