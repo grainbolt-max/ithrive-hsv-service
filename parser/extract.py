@@ -37,7 +37,7 @@ ROW_START = {
 
     # PANEL 2
     "hypothyroidism": 1530,
-    "hyperthyroidism": 1545,
+    "hyperthyroidism": 1560,
     "hepatic_fibrosis": 1590,
     "chronic_hepatitis": 1620,
     "prostate_cancer": 1655,
@@ -47,7 +47,7 @@ ROW_START = {
     "major_depression": 1810,
     "adhd_children_learning": 1840,
     "cerebral_dopamine_decreased": 1870,
-    "cerebral_serotonin_decreased": 1910,
+    "cerebral_serotonin_decreased": 1900,
 }
 
 
