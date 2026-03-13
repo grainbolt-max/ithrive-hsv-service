@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v103_indicator_square_classifier"
+ENGINE_NAME = "v104_indicator_square_hue_classifier"
 
 # --------------------------------------------------
-# LOCKED SAMPLING REGION (indicator square)
+# SAMPLING REGION
 # --------------------------------------------------
 
 X_LEFT = 939
@@ -13,8 +13,9 @@ X_RIGHT = 960
 
 BLOCK_HEIGHT = 14
 
+
 # --------------------------------------------------
-# ROW START COORDINATES (LOCKED)
+# ROW COORDINATES
 # --------------------------------------------------
 
 ROW_START = {
@@ -48,19 +49,21 @@ ROW_START = {
     "cerebral_serotonin_decreased": 1910,
 }
 
+
 # --------------------------------------------------
-# DEBUG COLORS
+# DEBUG COLOR MAP
 # --------------------------------------------------
 
 COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    None: (150,150,150)
+    None: (160,160,160)
 }
 
+
 # --------------------------------------------------
-# SAMPLE COLOR FROM INDICATOR SQUARE
+# SAMPLE INDICATOR SQUARE
 # --------------------------------------------------
 
 def sample_square(img, y):
@@ -75,26 +78,37 @@ def sample_square(img, y):
 
     return h, s, v
 
+
 # --------------------------------------------------
-# CLASSIFY COLOR
+# CLASSIFY BY HUE DISTANCE
 # --------------------------------------------------
 
-def classify_square(h, s, v):
+def classify_color(h, s, v):
 
-    # NONE / LOW RISK
+    # none / low risk
     if s < 60:
         return None
 
-    # YELLOW (mild)
-    if h > 20:
-        return "yellow"
+    # hue centers for colors
+    centers = {
+        "yellow": 28,
+        "orange": 15,
+        "red": 5
+    }
 
-    # RED (severe)
-    if s > 200 and v < 220:
-        return "red"
+    best = None
+    best_dist = 999
 
-    # ORANGE (moderate)
-    return "orange"
+    for color, center in centers.items():
+
+        d = abs(h - center)
+
+        if d < best_dist:
+            best = color
+            best_dist = d
+
+    return best
+
 
 # --------------------------------------------------
 # MAIN PARSER
@@ -114,20 +128,20 @@ def extract_scores(pdf_bytes, debug=False):
 
         h, s, v = sample_square(img, y)
 
-        risk = classify_square(h, s, v)
+        risk = classify_color(h, s, v)
 
         scores[disease] = risk
 
         if debug:
 
-            print(f"{disease:30} H={h:.1f}  S={s:.1f}  V={v:.1f}  → {risk}")
+            print(f"{disease:30} H={h:.1f} S={s:.1f} V={v:.1f} → {risk}")
 
             color = COLOR_MAP.get(risk)
 
             cv2.rectangle(
                 img,
                 (X_LEFT, y),
-                (X_RIGHT, y + BLOCK_HEIGHT),
+                (X_RIGHT, y+BLOCK_HEIGHT),
                 color,
                 2
             )
