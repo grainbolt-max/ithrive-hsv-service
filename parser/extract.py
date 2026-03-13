@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v83_locked_column_classifier"
+ENGINE_NAME = "v84_locked_column_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -11,12 +11,12 @@ ENGINE_NAME = "v83_locked_column_classifier"
 X_LEFT = 939
 X_RIGHT = 951
 
-# height of sampling block
+# sampling height
 BLOCK_HEIGHT = 16
 
 
 # --------------------------------------------------
-# ROW START COORDINATES (FINAL LOCKED)
+# ROW START COORDINATES (LOCKED)
 # --------------------------------------------------
 
 ROW_START = {
@@ -60,12 +60,12 @@ COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    "unknown": (200,200,200)
+    None: (200,200,200)
 }
 
 
 # --------------------------------------------------
-# HSV COLOR CLASSIFIER
+# COLOR CLASSIFIER (HSV)
 # --------------------------------------------------
 
 def classify_color(block):
@@ -76,23 +76,22 @@ def classify_color(block):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    # very low saturation = gray background
     if s < 40:
         return None
 
-    # RED
+    # red
     if h < 10 or h > 170:
         return "red"
 
-    # ORANGE
-    if 10 <= h < 20:
+    # orange
+    if 10 <= h < 22:
         return "orange"
 
-    # YELLOW
-    if 20 <= h < 35:
+    # yellow
+    if 22 <= h < 35:
         return "yellow"
 
-    # GREEN
+    # green
     if 35 <= h < 85:
         return "green"
 
@@ -100,17 +99,19 @@ def classify_color(block):
 
 
 # --------------------------------------------------
-# MAIN PARSER
+# MAIN EXTRACTION
 # --------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes, dpi=300)
+    # LOCKED DPI — DO NOT CHANGE
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if len(pages) < 2:
         raise Exception("PDF missing page 2")
 
-    page = pages[1]  # page 2
+    page = pages[1]
+
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
     scores = {}
@@ -129,7 +130,7 @@ def extract_scores(pdf_bytes, debug=False):
 
         if debug:
 
-            color = COLOR_MAP.get(result, COLOR_MAP["unknown"])
+            color = COLOR_MAP.get(result)
 
             cv2.rectangle(
                 img,
@@ -142,33 +143,20 @@ def extract_scores(pdf_bytes, debug=False):
             cv2.putText(
                 img,
                 disease,
-                (X_RIGHT + 10, y + 12),
+                (X_RIGHT + 8, y + 12),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
+                0.35,
                 (255,255,255),
                 1
             )
 
-    # draw locked column guide
     if debug:
 
-        cv2.line(
-            img,
-            (X_LEFT,0),
-            (X_LEFT,img.shape[0]),
-            (255,0,0),
-            2
-        )
+        # draw sampling column
+        cv2.line(img, (X_LEFT,0), (X_LEFT,img.shape[0]), (255,0,0), 2)
+        cv2.line(img, (X_RIGHT,0), (X_RIGHT,img.shape[0]), (255,0,0), 2)
 
-        cv2.line(
-            img,
-            (X_RIGHT,0),
-            (X_RIGHT,img.shape[0]),
-            (255,0,0),
-            2
-        )
-
-        success, png = cv2.imencode(".png", img)
+        ok, png = cv2.imencode(".png", img)
 
         return png.tobytes()
 
