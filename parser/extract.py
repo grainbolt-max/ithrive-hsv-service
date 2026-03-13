@@ -2,19 +2,18 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v75_locked_column_classifier"
+ENGINE_NAME = "v76_column_939_951"
 
-# --------------------------------------------
+# -------------------------------------------------
 # LOCKED COLOR SAMPLING COLUMN
-# --------------------------------------------
+# -------------------------------------------------
 
-X_LEFT = 941
+X_LEFT = 939
 X_RIGHT = 951
 
-
-# --------------------------------------------
+# -------------------------------------------------
 # DISEASE ROW COORDINATES
-# --------------------------------------------
+# -------------------------------------------------
 
 ROW_MAP = {
 
@@ -47,45 +46,45 @@ ROW_MAP = {
     "cerebral_serotonin_decreased": (2050, 2075),
 }
 
-
-# --------------------------------------------
-# COLOR CLASSIFICATION
-# --------------------------------------------
+# -------------------------------------------------
+# COLOR CLASSIFIER
+# -------------------------------------------------
 
 def classify_color(region):
 
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
 
-    avg = hsv.mean(axis=(0,1))
+    avg = hsv.mean(axis=(0, 1))
     h, s, v = avg
 
-    # red
+    # RED
     if (h < 10 or h > 170) and s > 120 and v > 120:
         return "red"
 
-    # orange
+    # ORANGE
     if 10 < h < 25 and s > 120:
         return "orange"
 
-    # yellow
+    # YELLOW
     if 25 < h < 40 and s > 120:
         return "yellow"
 
     return None
 
 
-# --------------------------------------------
+# -------------------------------------------------
 # MAIN PARSER
-# --------------------------------------------
+# -------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
     images = convert_from_bytes(pdf_bytes)
 
+    # page 2 contains disease risk bars
     page = np.array(images[1])
     page = cv2.cvtColor(page, cv2.COLOR_RGB2BGR)
 
-    results = {}
+    scores = {}
 
     debug_img = page.copy()
 
@@ -95,15 +94,14 @@ def extract_scores(pdf_bytes, debug=False):
 
         color = classify_color(region)
 
-        results[disease] = color
+        scores[disease] = color
 
         if debug:
-
             cv2.rectangle(
                 debug_img,
                 (X_LEFT, y1),
                 (X_RIGHT, y2),
-                (0,255,0),
+                (0, 255, 0),
                 2
             )
 
@@ -113,7 +111,7 @@ def extract_scores(pdf_bytes, debug=False):
             debug_img,
             (X_LEFT, 0),
             (X_LEFT, debug_img.shape[0]),
-            (255,0,0),
+            (255, 0, 0),
             2
         )
 
@@ -122,5 +120,5 @@ def extract_scores(pdf_bytes, debug=False):
 
     return {
         "engine": ENGINE_NAME,
-        "scores": results
+        "scores": scores
     }
