@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v84_locked_column_classifier"
+ENGINE_NAME = "v85_locked_column_kmeans_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -10,8 +10,6 @@ ENGINE_NAME = "v84_locked_column_classifier"
 
 X_LEFT = 939
 X_RIGHT = 951
-
-# sampling height
 BLOCK_HEIGHT = 16
 
 
@@ -56,7 +54,6 @@ ROW_START = {
 # --------------------------------------------------
 
 COLOR_MAP = {
-    "green": (0,255,0),
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
@@ -65,10 +62,12 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# COLOR CLASSIFIER (HSV)
+# SAMPLE BAR COLOR
 # --------------------------------------------------
 
-def classify_color(block):
+def sample_bar_color(img, y):
+
+    block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
 
     hsv = cv2.cvtColor(block, cv2.COLOR_BGR2HSV)
 
@@ -76,26 +75,68 @@ def classify_color(block):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    if s < 40:
+    return np.array([h,s,v])
+
+
+# --------------------------------------------------
+# CALIBRATE COLORS USING HUE (KMEANS)
+# --------------------------------------------------
+
+def calibrate_colors(samples):
+
+    colored = np.array([s for s in samples if s[1] > 40])
+
+    if len(colored) < 3:
+        return None, None
+
+    data = colored[:,0].reshape(-1,1).astype(np.float32)
+
+    K = 3
+
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        10,
+        1.0
+    )
+
+    _, labels, centers = cv2.kmeans(
+        data,
+        K,
+        None,
+        criteria,
+        10,
+        cv2.KMEANS_RANDOM_CENTERS
+    )
+
+    centers = centers.flatten()
+
+    order = np.argsort(centers)
+
+    cluster_map = {
+        order[0]: "yellow",
+        order[1]: "orange",
+        order[2]: "red"
+    }
+
+    return centers, cluster_map
+
+
+# --------------------------------------------------
+# CLASSIFY BAR
+# --------------------------------------------------
+
+def classify_bar(sample, centers, cluster_map):
+
+    if sample[1] < 40:
         return None
 
-    # red
-    if h < 10 or h > 170:
-        return "red"
+    h = sample[0]
 
-    # orange
-    if 10 <= h < 22:
-        return "orange"
+    dists = [abs(h - c) for c in centers]
 
-    # yellow
-    if 22 <= h < 35:
-        return "yellow"
+    cluster = np.argmin(dists)
 
-    # green
-    if 35 <= h < 85:
-        return "green"
-
-    return None
+    return cluster_map[cluster]
 
 
 # --------------------------------------------------
@@ -104,7 +145,7 @@ def classify_color(block):
 
 def extract_scores(pdf_bytes, debug=False):
 
-    # LOCKED DPI — DO NOT CHANGE
+    # DO NOT CHANGE DPI
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     if len(pages) < 2:
@@ -114,23 +155,46 @@ def extract_scores(pdf_bytes, debug=False):
 
     img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
+    samples = []
+    disease_list = list(ROW_START.keys())
+
+    # --------------------------------------------------
+    # SAMPLE ALL BARS
+    # --------------------------------------------------
+
+    for disease in disease_list:
+
+        y = ROW_START[disease]
+
+        hsv = sample_bar_color(img, y)
+
+        samples.append(hsv)
+
+    # --------------------------------------------------
+    # CALIBRATE COLORS
+    # --------------------------------------------------
+
+    centers, cluster_map = calibrate_colors(samples)
+
     scores = {}
 
-    for disease, y in ROW_START.items():
+    # --------------------------------------------------
+    # CLASSIFY EACH BAR
+    # --------------------------------------------------
 
-        block = img[y:y+BLOCK_HEIGHT, X_LEFT:X_RIGHT]
+    for i, disease in enumerate(disease_list):
 
-        if block.size == 0:
-            scores[disease] = None
-            continue
+        y = ROW_START[disease]
 
-        result = classify_color(block)
+        sample = samples[i]
 
-        scores[disease] = result
+        risk = classify_bar(sample, centers, cluster_map)
+
+        scores[disease] = risk
 
         if debug:
 
-            color = COLOR_MAP.get(result)
+            color = COLOR_MAP.get(risk, (200,200,200))
 
             cv2.rectangle(
                 img,
@@ -152,7 +216,6 @@ def extract_scores(pdf_bytes, debug=False):
 
     if debug:
 
-        # draw sampling column
         cv2.line(img, (X_LEFT,0), (X_LEFT,img.shape[0]), (255,0,0), 2)
         cv2.line(img, (X_RIGHT,0), (X_RIGHT,img.shape[0]), (255,0,0), 2)
 
