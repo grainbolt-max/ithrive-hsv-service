@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v101_indicator_square_classifier"
+ENGINE_NAME = "v102_indicator_square_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING REGION
@@ -81,20 +81,20 @@ def sample_square(img, y):
 
 def classify_square(h,s,v):
 
-    # LOW SATURATION = NONE / LOW RISK
+    # NONE / LOW RISK
     if s < 60:
         return None
 
-    # YELLOW
-    if h < 30:
-        return "yellow"
+    # RED
+    if h < 8:
+        return "red"
 
     # ORANGE
-    if h < 45:
+    if h < 20:
         return "orange"
 
-    # RED
-    return "red"
+    # YELLOW
+    return "yellow"
 
 # --------------------------------------------------
 # MAIN PARSER
@@ -119,6 +119,8 @@ def extract_scores(pdf_bytes, debug=False):
         scores[disease] = risk
 
         if debug:
+
+            print(f"{disease:30} H={h:.1f}  S={s:.1f}  V={v:.1f}  → {risk}")
 
             color = COLOR_MAP.get(risk)
 
