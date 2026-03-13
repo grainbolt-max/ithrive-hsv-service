@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v82_locked_column_classifier"
+ENGINE_NAME = "v83_locked_column_classifier_hsv"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -16,7 +16,7 @@ BLOCK_HEIGHT = 16
 
 
 # --------------------------------------------------
-# ROW START COORDINATES (UPDATED)
+# ROW START COORDINATES (LOCKED)
 # --------------------------------------------------
 
 ROW_START = {
@@ -52,24 +52,32 @@ ROW_START = {
 
 
 # --------------------------------------------------
-# COLOR CLASSIFIER
+# HSV COLOR CLASSIFIER
 # --------------------------------------------------
 
 def classify_color(mean_bgr):
 
-    b, g, r = mean_bgr
+    # convert sampled color to HSV
+    color = np.uint8([[mean_bgr]])
+    hsv = cv2.cvtColor(color, cv2.COLOR_BGR2HSV)[0][0]
 
-    if r > 180 and g < 120:
+    h, s, v = hsv
+
+    # red
+    if h < 10 or h > 170:
         return "red"
 
-    if r > 180 and g > 140:
+    # orange
+    if 10 <= h < 22:
         return "orange"
 
-    if g > 160 and r < 150:
-        return "green"
-
-    if r > 200 and g > 200:
+    # yellow
+    if 22 <= h < 35:
         return "yellow"
+
+    # green
+    if 35 <= h < 85:
+        return "green"
 
     return None
 
