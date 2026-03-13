@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v104_indicator_square_hue_classifier"
+ENGINE_NAME = "v105_indicator_square_classifier"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -58,7 +58,7 @@ COLOR_MAP = {
     "yellow": (0,255,255),
     "orange": (0,165,255),
     "red": (0,0,255),
-    None: (160,160,160)
+    None: (150,150,150)
 }
 
 
@@ -80,34 +80,25 @@ def sample_square(img, y):
 
 
 # --------------------------------------------------
-# CLASSIFY BY HUE DISTANCE
+# COLOR CLASSIFIER
 # --------------------------------------------------
 
 def classify_color(h, s, v):
 
-    # none / low risk
+    # NONE / LOW RISK
     if s < 60:
         return None
 
-    # hue centers for colors
-    centers = {
-        "yellow": 28,
-        "orange": 15,
-        "red": 5
-    }
+    # YELLOW (mild)
+    if h > 22:
+        return "yellow"
 
-    best = None
-    best_dist = 999
+    # RED (darker)
+    if v < 180:
+        return "red"
 
-    for color, center in centers.items():
-
-        d = abs(h - center)
-
-        if d < best_dist:
-            best = color
-            best_dist = d
-
-    return best
+    # ORANGE (brighter)
+    return "orange"
 
 
 # --------------------------------------------------
@@ -141,7 +132,7 @@ def extract_scores(pdf_bytes, debug=False):
             cv2.rectangle(
                 img,
                 (X_LEFT, y),
-                (X_RIGHT, y+BLOCK_HEIGHT),
+                (X_RIGHT, y + BLOCK_HEIGHT),
                 color,
                 2
             )
