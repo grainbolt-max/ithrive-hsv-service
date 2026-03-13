@@ -36,7 +36,7 @@ def parse_report():
     file = request.files["file"]
     pdf_bytes = file.read()
 
-    debug = request.form.get("debug") == "true"
+    debug = request.form.get("debug") in ["true", "1", "yes"]
 
     try:
         result = extract_scores(pdf_bytes, debug=debug)
