@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v112_square_sampling_locked"
+ENGINE_NAME = "v113_blue_intensity_classifier"
 
 # --------------------------------------------------
-# SAMPLING REGION
+# SAMPLING REGION (UNCHANGED)
 # --------------------------------------------------
 
 X_LEFT = 939
@@ -82,25 +82,25 @@ def sample_bar(img, y):
 
 
 # --------------------------------------------------
-# COLOR CLASSIFIER
+# CLASSIFIER FOR BLUE SCALES
 # --------------------------------------------------
 
 def classify_color(h, s, v):
 
-    # Detect if a bar actually exists (filters text rows)
-    if s < 55:
+    # no bar present
+    if s < 50:
         return None
 
-    # Yellow
-    if h > 22:
-        return "yellow"
-
-    # Red
-    if v < 200:
+    # severe (dark blue)
+    if v < 120:
         return "red"
 
-    # Orange
-    return "orange"
+    # moderate (medium blue)
+    if v < 170:
+        return "orange"
+
+    # mild (light cyan)
+    return "yellow"
 
 
 # --------------------------------------------------
