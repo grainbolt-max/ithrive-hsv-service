@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v108_locked_geometry_auto_color"
+ENGINE_NAME = "v109_locked_geometry_color_classifier"
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -62,13 +62,14 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# SAMPLE INDICATOR SQUARE (CENTER ONLY)
+# SAMPLE INDICATOR SQUARE
 # --------------------------------------------------
 
 def sample_square(img, y):
 
     mid = y + BLOCK_HEIGHT // 2
 
+    # isolate center of the colored square
     sample = img[mid-2:mid+2, X_LEFT+4:X_RIGHT-4]
 
     hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
@@ -77,95 +78,48 @@ def sample_square(img, y):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    return np.array([h,s,v])
+    return h, s, v
 
 
 # --------------------------------------------------
-# AUTO CALIBRATE COLORS
+# COLOR CLASSIFIER
 # --------------------------------------------------
 
-def calibrate_colors(samples):
+def classify_color(h, s, v):
 
-    colored = np.array([s for s in samples if s[1] > 25])
-
-    if len(colored) < 3:
-        return None,None
-
-    data = colored[:,0].reshape(-1,1).astype(np.float32)
-
-    K = 3
-
-    criteria = (
-        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-        10,
-        1.0
-    )
-
-    _, labels, centers = cv2.kmeans(
-        data,
-        K,
-        None,
-        criteria,
-        10,
-        cv2.KMEANS_RANDOM_CENTERS
-    )
-
-    centers = centers.flatten()
-
-    order = np.argsort(centers)
-
-    cluster_map = {
-        order[0]:"red",
-        order[1]:"orange",
-        order[2]:"yellow"
-    }
-
-    return centers,cluster_map
-
-
-# --------------------------------------------------
-# CLASSIFY COLOR
-# --------------------------------------------------
-
-def classify_color(sample,centers,cluster_map):
-
-    h,s,v = sample
-
-    if s < 60:
+    # Step 1: detect if there is actually a colored bar
+    if s < 40:
         return None
 
-    dists = [abs(h - c) for c in centers]
+    # Step 2: classify the color
+    if h > 22:
+        return "yellow"
 
-    cluster = np.argmin(dists)
+    if v < 210:
+        return "red"
 
-    return cluster_map[cluster]
+    return "orange"
 
 
 # --------------------------------------------------
 # MAIN PARSER
 # --------------------------------------------------
 
-def extract_scores(pdf_bytes,debug=False):
+def extract_scores(pdf_bytes, debug=False):
 
-    pages = convert_from_bytes(pdf_bytes,dpi=200)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
 
     page = pages[1]
 
-    img = cv2.cvtColor(np.array(page),cv2.COLOR_RGB2BGR)
-
-    samples = []
-
-    for y in ROW_START.values():
-
-        samples.append(sample_square(img,y))
-
-    centers,cluster_map = calibrate_colors(samples)
+    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
 
     scores = {}
 
-    for i,(disease,y) in enumerate(ROW_START.items()):
+    for disease, y in ROW_START.items():
 
-        risk = classify_color(samples[i],centers,cluster_map)
+        h, s, v = sample_square(img, y)
+
+        risk = classify_color(h, s, v)
 
         scores[disease] = risk
 
@@ -175,22 +129,22 @@ def extract_scores(pdf_bytes,debug=False):
 
             cv2.rectangle(
                 img,
-                (X_LEFT,y),
-                (X_RIGHT,y+BLOCK_HEIGHT),
+                (X_LEFT, y),
+                (X_RIGHT, y + BLOCK_HEIGHT),
                 color,
                 2
             )
 
     if debug:
 
-        cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
-        cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
+        cv2.line(img, (X_LEFT,0), (X_LEFT,img.shape[0]), (255,0,0), 2)
+        cv2.line(img, (X_RIGHT,0), (X_RIGHT,img.shape[0]), (255,0,0), 2)
 
-        ok,png = cv2.imencode(".png",img)
+        ok, png = cv2.imencode(".png", img)
 
         return png.tobytes()
 
     return {
-        "engine":ENGINE_NAME,
-        "scores":scores
+        "engine": ENGINE_NAME,
+        "scores": scores
     }
