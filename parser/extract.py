@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v80_locked_column_classifier"
+ENGINE_NAME = "v81_locked_column_classifier"
 
 # --------------------------------------------------
 # LOCKED SAMPLING COLUMN
@@ -11,7 +11,7 @@ ENGINE_NAME = "v80_locked_column_classifier"
 X_LEFT = 939
 X_RIGHT = 951
 
-# height of green sampling block
+# height of sampling block
 BLOCK_HEIGHT = 16
 
 
@@ -25,34 +25,34 @@ ROW_START = {
     "large_artery_stiffness": 920,
     "peripheral_vessel": 950,
     "blood_pressure_uncontrolled": 985,
-    "small_medium_artery_stiffness": 1020,
-    "atherosclerosis": 1055,
+    "small_medium_artery_stiffness": 1015,
+    "atherosclerosis": 1035,
     "ldl_cholesterol": 1075,
     "lv_hypertrophy": 1110,
     "metabolic_syndrome": 1170,
     "insulin_resistance": 1200,
     "beta_cell_function_decreased": 1235,
     "blood_glucose_uncontrolled": 1265,
-    "tissue_inflammatory_process": 1305,
+    "tissue_inflammatory_process": 1280,
 
     # PANEL 2
     "hypothyroidism": 1530,
-    "hyperthyroidism": 1560,
+    "hyperthyroidism": 1555,
     "hepatic_fibrosis": 1590,
-    "chronic_hepatitis": 1625,
+    "chronic_hepatitis": 1620,
     "prostate_cancer": 1655,
     "respiratory_disorders": 1685,
     "kidney_function_disorders": 1715,
     "digestive_disorders": 1745,
-    "major_depression": 1805,
+    "major_depression": 1815,
     "adhd_children_learning": 1840,
     "cerebral_dopamine_decreased": 1870,
-    "cerebral_serotonin_decreased": 1910,
+    "cerebral_serotonin_decreased": 1900,
 }
 
 
 # --------------------------------------------------
-# COLOR CLASSIFICATION
+# COLOR CLASSIFIER
 # --------------------------------------------------
 
 def classify_color(mean_bgr):
@@ -75,14 +75,14 @@ def classify_color(mean_bgr):
 
 
 # --------------------------------------------------
-# CORE EXTRACTION
+# EXTRACTION
 # --------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
     pages = convert_from_bytes(pdf_bytes, dpi=200)
 
-    # disease panels live on page 2
+    # disease panels are on page 2
     img = np.array(pages[1])
 
     scores = {}
@@ -91,7 +91,7 @@ def extract_scores(pdf_bytes, debug=False):
 
     height = img.shape[0]
 
-    # draw locked sampling column
+    # draw sampling column
     if debug:
         cv2.rectangle(
             debug_img,
