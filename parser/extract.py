@@ -2,75 +2,96 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v113_blue_intensity_classifier"
+ENGINE_NAME = "v67_auto_calibrated_hue_classifier"
 
-# --------------------------------------------------
-# SAMPLING REGION (UNCHANGED)
-# --------------------------------------------------
+# Locked sampling column
+X_LEFT = 938
+X_RIGHT = 955
 
-X_LEFT = 939
-X_RIGHT = 960
-BLOCK_HEIGHT = 14
+# Detection window
+MIN_Y = 880
+MAX_Y = 2050
 
-
-# --------------------------------------------------
-# ROW POSITIONS
-# --------------------------------------------------
-
-ROW_START = {
-
-    "large_artery_stiffness": 920,
-    "peripheral_vessel": 950,
-    "blood_pressure_uncontrolled": 985,
-    "small_medium_artery_stiffness": 1015,
-    "atherosclerosis": 1050,
-    "ldl_cholesterol": 1075,
-    "lv_hypertrophy": 1110,
-    "metabolic_syndrome": 1170,
-    "insulin_resistance": 1200,
-    "beta_cell_function_decreased": 1235,
-    "blood_glucose_uncontrolled": 1265,
-    "tissue_inflammatory_process": 1295,
-
-    "hypothyroidism": 1530,
-    "hyperthyroidism": 1545,
-    "hepatic_fibrosis": 1590,
-    "chronic_hepatitis": 1620,
-    "prostate_cancer": 1655,
-    "respiratory_disorders": 1685,
-    "kidney_function_disorders": 1715,
-    "digestive_disorders": 1745,
-    "major_depression": 1810,
-    "adhd_children_learning": 1840,
-    "cerebral_dopamine_decreased": 1870,
-    "cerebral_serotonin_decreased": 1910,
-}
+DISEASES = [
+"large_artery_stiffness",
+"peripheral_vessel",
+"blood_pressure_uncontrolled",
+"small_medium_artery_stiffness",
+"atherosclerosis",
+"ldl_cholesterol",
+"lv_hypertrophy",
+"metabolic_syndrome",
+"insulin_resistance",
+"beta_cell_function_decreased",
+"blood_glucose_uncontrolled",
+"tissue_inflammatory_process",
+"hypothyroidism",
+"hyperthyroidism",
+"hepatic_fibrosis",
+"chronic_hepatitis",
+"prostate_cancer",
+"respiratory_disorders",
+"kidney_function_disorders",
+"digestive_disorders",
+"major_depression",
+"adhd_children_learning",
+"cerebral_dopamine_decreased",
+"cerebral_serotonin_decreased"
+]
 
 
-# --------------------------------------------------
-# DEBUG COLORS
-# --------------------------------------------------
+# ------------------------------------------------
+# ROW DETECTION
+# ------------------------------------------------
+def detect_rows(img):
 
-COLOR_MAP = {
-    "yellow": (0,255,255),
-    "orange": (0,165,255),
-    "red": (0,0,255),
-    None: (150,150,150)
-}
+    column = img[MIN_Y:MAX_Y, X_LEFT:X_RIGHT]
+    hsv = cv2.cvtColor(column, cv2.COLOR_BGR2HSV)
+
+    rows = []
+    inside = False
+    start = 0
+
+    for y in range(hsv.shape[0]):
+
+        s = np.mean(hsv[y,:,1])
+
+        if s > 40 and not inside:
+            start = y
+            inside = True
+
+        if s < 20 and inside:
+
+            end = y
+
+            if 10 < (end-start) < 40:
+                rows.append((start+MIN_Y,end+MIN_Y))
+
+            inside = False
+
+    filtered = []
+    for r in rows:
+        if not filtered:
+            filtered.append(r)
+            continue
+
+        if r[0] - filtered[-1][0] > 18:
+            filtered.append(r)
+
+    return filtered
 
 
-# --------------------------------------------------
-# SAMPLE INDICATOR SQUARE
-# --------------------------------------------------
+# ------------------------------------------------
+# SAMPLE BAR COLOR (FIXED SAMPLING WINDOW)
+# ------------------------------------------------
+def sample_bar_color(img, y1, y2):
 
-def sample_bar(img, y):
-
-    mid = y + BLOCK_HEIGHT // 2
+    mid = int((y1+y2)/2)
 
     square_left = X_LEFT + 2
     square_right = X_LEFT + 9
 
-    sample = img[mid-3:mid+3, square_left:square_right]
+    sample = img[mid-2:mid+2, square_left:square_right]
 
     hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
 
@@ -78,75 +99,147 @@ def sample_bar(img, y):
     s = np.mean(hsv[:,:,1])
     v = np.mean(hsv[:,:,2])
 
-    return h, s, v
+    return np.array([h,s,v])
 
 
-# --------------------------------------------------
-# CLASSIFIER FOR BLUE SCALES
-# --------------------------------------------------
+# ------------------------------------------------
+# CALIBRATE COLORS USING HUE
+# ------------------------------------------------
+def calibrate_colors(samples):
 
-def classify_color(h, s, v):
+    colored = np.array([s for s in samples if s[1] > 25])
 
-    # no bar present
-    if s < 50:
+    if len(colored) < 3:
         return None
 
-    # severe (dark blue)
-    if v < 120:
-        return "red"
+    data = colored[:,0].reshape(-1,1).astype(np.float32)
 
-    # moderate (medium blue)
-    if v < 170:
-        return "orange"
+    K = 3
 
-    # mild (light cyan)
-    return "yellow"
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        10,
+        1.0
+    )
+
+    _, labels, centers = cv2.kmeans(
+        data,
+        K,
+        None,
+        criteria,
+        10,
+        cv2.KMEANS_RANDOM_CENTERS
+    )
+
+    centers = centers.flatten()
+
+    order = np.argsort(centers)
+
+    cluster_map = {
+        order[0]:"yellow",
+        order[1]:"orange",
+        order[2]:"red"
+    }
+
+    return centers, cluster_map
 
 
-# --------------------------------------------------
+# ------------------------------------------------
+# CLASSIFY BAR
+# ------------------------------------------------
+def classify_bar(sample, centers, cluster_map):
+
+    if sample[1] < 25:
+        return None
+
+    h = sample[0]
+
+    dists = [abs(h - c) for c in centers]
+
+    cluster = np.argmin(dists)
+
+    return cluster_map[cluster]
+
+
+# ------------------------------------------------
+# DEBUG DRAW
+# ------------------------------------------------
+def draw_debug(img, rows, scores):
+
+    debug = img.copy()
+
+    colors = {
+        "yellow":(0,255,255),
+        "orange":(0,165,255),
+        "red":(0,0,255)
+    }
+
+    for i,(y1,y2) in enumerate(rows):
+
+        if i >= len(DISEASES):
+            break
+
+        risk = scores.get(DISEASES[i])
+
+        if risk is None:
+            continue
+
+        cv2.rectangle(
+            debug,
+            (X_LEFT,y1),
+            (X_RIGHT,y2),
+            colors[risk],
+            3
+        )
+
+    return debug
+
+
+# ------------------------------------------------
 # MAIN PARSER
-# --------------------------------------------------
+# ------------------------------------------------
+def parse_report(pdf_bytes, debug=False):
 
-def extract_scores(pdf_bytes, debug=False):
+    images = convert_from_bytes(pdf_bytes, dpi=200)
 
-    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    img = np.array(images[1])
 
-    page = pages[1]
+    rows = detect_rows(img)
 
-    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+    samples = []
+
+    for y1,y2 in rows:
+        samples.append(sample_bar_color(img,y1,y2))
+
+    centers,cluster_map = calibrate_colors(samples)
 
     scores = {}
 
-    for disease, y in ROW_START.items():
+    for i,(y1,y2) in enumerate(rows):
 
-        h, s, v = sample_bar(img, y)
+        if i >= len(DISEASES):
+            break
 
-        risk = classify_color(h, s, v)
-
-        scores[disease] = risk
-
-        if debug:
-
-            color = COLOR_MAP.get(risk)
-
-            cv2.rectangle(
-                img,
-                (X_LEFT, y),
-                (X_RIGHT, y + BLOCK_HEIGHT),
-                color,
-                2
-            )
+        scores[DISEASES[i]] = classify_bar(
+            samples[i],
+            centers,
+            cluster_map
+        )
 
     if debug:
 
-        cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
-        cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
+        overlay = draw_debug(img,rows,scores)
 
-        ok,png = cv2.imencode(".png",img)
+        _,png = cv2.imencode(".png",overlay)
 
         return png.tobytes()
 
     return {
-        "engine": ENGINE_NAME,
-        "scores": scores
+        "engine":ENGINE_NAME,
+        "scores":scores
     }
+
+
+def extract_scores(pdf_bytes):
+
+    return parse_report(pdf_bytes)
