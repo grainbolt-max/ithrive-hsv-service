@@ -2,101 +2,109 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v76_column_939_951"
+ENGINE_NAME = "v76_locked_column_classifier"
 
-# -------------------------------------------------
-# LOCKED COLOR SAMPLING COLUMN
-# -------------------------------------------------
-
+# Locked sampling column
 X_LEFT = 939
 X_RIGHT = 951
 
-# -------------------------------------------------
-# DISEASE ROW COORDINATES
-# -------------------------------------------------
+# --------------------------------------------------
+# DISEASE ROW COORDINATES (shifted to match panel)
+# --------------------------------------------------
 
 ROW_MAP = {
 
     # PANEL 1
-    "large_artery_stiffness": (908, 933),
-    "peripheral_vessel": (958, 983),
-    "blood_pressure_uncontrolled": (1008, 1033),
-    "small_medium_artery_stiffness": (1058, 1083),
-    "atherosclerosis": (1108, 1133),
-    "ldl_cholesterol": (1158, 1183),
-    "lv_hypertrophy": (1208, 1233),
-    "metabolic_syndrome": (1283, 1308),
-    "insulin_resistance": (1333, 1358),
-    "beta_cell_function_decreased": (1383, 1408),
-    "blood_glucose_uncontrolled": (1433, 1458),
-    "tissue_inflammatory_process": (1483, 1508),
+    "large_artery_stiffness": (910, 935),
+    "peripheral_vessel": (960, 985),
+    "blood_pressure_uncontrolled": (1010, 1035),
+    "small_medium_artery_stiffness": (1060, 1085),
+    "atherosclerosis": (1110, 1135),
+    "ldl_cholesterol": (1160, 1185),
+    "lv_hypertrophy": (1210, 1235),
+    "metabolic_syndrome": (1285, 1310),
+    "insulin_resistance": (1335, 1360),
+    "beta_cell_function_decreased": (1385, 1410),
+    "blood_glucose_uncontrolled": (1435, 1460),
+    "tissue_inflammatory_process": (1485, 1510),
 
     # PANEL 2
-    "hypothyroidism": (1490, 1520),
-    "hyperthyroidism": (1540, 1565),
-    "hepatic_fibrosis": (1590, 1620),
-    "chronic_hepatitis": (1630, 1655),
-    "prostate_cancer": (1675, 1700),
-    "respiratory_disorders": (1725, 1750),
-    "kidney_function_disorders": (1775, 1800),
-    "digestive_disorders": (1825, 1850),
-    "major_depression": (1920, 1945),
-    "adhd_children_learning": (1960, 1985),
-    "cerebral_dopamine_decreased": (2015, 2040),
-    "cerebral_serotonin_decreased": (2050, 2075),
+    "hypothyroidism": (1825, 1855),
+    "hyperthyroidism": (1875, 1900),
+    "hepatic_fibrosis": (1925, 1955),
+    "chronic_hepatitis": (1965, 1990),
+    "prostate_cancer": (2010, 2035),
+    "respiratory_disorders": (2060, 2085),
+    "kidney_function_disorders": (2110, 2135),
+    "digestive_disorders": (2160, 2185),
+    "major_depression": (2255, 2280),
+    "adhd_children_learning": (2295, 2320),
+    "cerebral_dopamine_decreased": (2350, 2375),
+    "cerebral_serotonin_decreased": (2385, 2410),
 }
 
-# -------------------------------------------------
+
+# --------------------------------------------------
 # COLOR CLASSIFIER
-# -------------------------------------------------
+# --------------------------------------------------
 
-def classify_color(region):
+def classify_color(mean_bgr):
 
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    b, g, r = mean_bgr
 
-    avg = hsv.mean(axis=(0, 1))
-    h, s, v = avg
-
-    # RED
-    if (h < 10 or h > 170) and s > 120 and v > 120:
+    if r > 180 and g < 120:
         return "red"
 
-    # ORANGE
-    if 10 < h < 25 and s > 120:
+    if r > 180 and g > 140:
         return "orange"
 
-    # YELLOW
-    if 25 < h < 40 and s > 120:
+    if g > 160 and r < 150:
+        return "green"
+
+    if r > 200 and g > 200:
         return "yellow"
 
     return None
 
 
-# -------------------------------------------------
-# MAIN PARSER
-# -------------------------------------------------
+# --------------------------------------------------
+# CORE EXTRACTION
+# --------------------------------------------------
 
 def extract_scores(pdf_bytes, debug=False):
 
-    images = convert_from_bytes(pdf_bytes)
-
-    # page 2 contains disease risk bars
-    page = np.array(images[1])
-    page = cv2.cvtColor(page, cv2.COLOR_RGB2BGR)
+    pages = convert_from_bytes(pdf_bytes, dpi=200)
+    img = np.array(pages[0])
 
     scores = {}
 
-    debug_img = page.copy()
+    debug_img = img.copy()
+
+    height = img.shape[0]
+
+    # Draw sampling column
+    if debug:
+        cv2.rectangle(
+            debug_img,
+            (X_LEFT, 0),
+            (X_RIGHT, height),
+            (255, 0, 0),
+            2
+        )
 
     for disease, (y1, y2) in ROW_MAP.items():
 
-        region = page[y1:y2, X_LEFT:X_RIGHT]
+        region = img[y1:y2, X_LEFT:X_RIGHT]
 
-        color = classify_color(region)
+        mean_color = np.mean(region.reshape(-1, 3), axis=0)
 
-        scores[disease] = color
+        classification = classify_color(mean_color)
+
+        scores[disease] = classification
 
         if debug:
+
+            # green rectangle for sampled area
             cv2.rectangle(
                 debug_img,
                 (X_LEFT, y1),
@@ -106,15 +114,6 @@ def extract_scores(pdf_bytes, debug=False):
             )
 
     if debug:
-
-        cv2.line(
-            debug_img,
-            (X_LEFT, 0),
-            (X_LEFT, debug_img.shape[0]),
-            (255, 0, 0),
-            2
-        )
-
         _, buffer = cv2.imencode(".png", debug_img)
         return buffer.tobytes()
 
