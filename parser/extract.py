@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
-ENGINE_NAME = "v110_center_square_sampling"
+ENGINE_NAME = "v111_bar_sampling_restored"
+
 
 # --------------------------------------------------
 # SAMPLING REGION
@@ -14,7 +15,7 @@ BLOCK_HEIGHT = 14
 
 
 # --------------------------------------------------
-# ROW COORDINATES
+# ROW POSITIONS
 # --------------------------------------------------
 
 ROW_START = {
@@ -60,16 +61,15 @@ COLOR_MAP = {
 
 
 # --------------------------------------------------
-# SAMPLE CENTER OF COLORED SQUARE
+# SAMPLE BAR (OLD WORKING METHOD)
 # --------------------------------------------------
 
-def sample_square(img, y):
+def sample_bar(img, y):
 
     mid = y + BLOCK_HEIGHT // 2
 
-    center = int((X_LEFT + X_RIGHT) / 2)
-
-    sample = img[mid-3:mid+3, center-3:center+3]
+    # sample entire bar width (restores color bleed behavior)
+    sample = img[mid-3:mid+3, X_LEFT:X_RIGHT]
 
     hsv = cv2.cvtColor(sample, cv2.COLOR_BGR2HSV)
 
@@ -86,19 +86,19 @@ def sample_square(img, y):
 
 def classify_color(h, s, v):
 
-    # Detect if a bar exists
-    if s < 40:
+    # no bar present
+    if s < 35:
         return None
 
-    # Yellow
+    # yellow
     if h > 22:
         return "yellow"
 
-    # Red
+    # red
     if v < 210:
         return "red"
 
-    # Orange
+    # orange
     return "orange"
 
 
@@ -118,7 +118,7 @@ def extract_scores(pdf_bytes, debug=False):
 
     for disease, y in ROW_START.items():
 
-        h, s, v = sample_square(img, y)
+        h, s, v = sample_bar(img, y)
 
         risk = classify_color(h, s, v)
 
@@ -138,10 +138,10 @@ def extract_scores(pdf_bytes, debug=False):
 
     if debug:
 
-        cv2.line(img, (X_LEFT,0), (X_LEFT,img.shape[0]), (255,0,0), 2)
-        cv2.line(img, (X_RIGHT,0), (X_RIGHT,img.shape[0]), (255,0,0), 2)
+        cv2.line(img,(X_LEFT,0),(X_LEFT,img.shape[0]),(255,0,0),2)
+        cv2.line(img,(X_RIGHT,0),(X_RIGHT,img.shape[0]),(255,0,0),2)
 
-        ok, png = cv2.imencode(".png", img)
+        ok,png = cv2.imencode(".png",img)
 
         return png.tobytes()
 
